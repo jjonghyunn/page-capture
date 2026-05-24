@@ -36,7 +36,7 @@ python page_capture_260522_v2.3.py
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
 
-> 💡 **`pythonw.exe` 사용 권장**  
+> **`pythonw.exe` 사용 권장**  
 > `python.exe`는 실행 시 cmd 창이 팝업됩니다.  
 > 같은 경로의 `pythonw.exe`를 사용하면 창이 전혀 뜨지 않습니다.
 
@@ -77,3 +77,7 @@ pip install selenium Pillow numpy
 1. Chrome 버전 확인 (`chrome://settings/help`)
 2. https://googlechromelabs.github.io/chrome-for-testing/ 에서 동일 버전 다운로드
 3. `chromedriver.exe`를 PATH에 추가하거나 스크립트와 같은 폴더에 배치
+
+## License
+
+MIT
