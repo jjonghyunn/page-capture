@@ -8,7 +8,7 @@ PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 
 | 파일 | 설명 |
 |---|---|
 | `page_capture_260522_v2.3.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
-| `foldering_move_png_251126_26campaign_name.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
+| `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
 
@@ -59,7 +59,7 @@ schtasks /create /tn page_capture ^
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
-캡처 완료 후 `foldering_move_png_251126_26campaign_name.py`를 실행하면  
+캡처 완료 후 `foldering_move_png.py`를 실행하면  
 사이트코드별 하위 폴더로 자동 분류됩니다.
 
 ## 요구사항
