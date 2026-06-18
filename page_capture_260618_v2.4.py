@@ -1,8 +1,9 @@
-# page_capture_260522_v2.3.py
+# page_capture_260618_v2.4.py
 # 2026-04-17  user_id w/ Claude  — v2.0 초기 버전
 # 2026-04-20  user_id w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  user_id w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
 # 2026-05-22  user_id w/ Claude  — v2.3 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (TARGET_DOMAIN / TARGET_DOMAIN_CN / TARGET_BRAND_KEYWORD) + 설정 상수 파일 상단으로 이동
+# 2026-06-18  user_id w/ Claude  — v2.4 캡처를 ThreadPoolExecutor 로 병렬화 (MAX_WORKERS) + URL 목록 상단 상수(URLS)로 이동
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -14,6 +15,9 @@ import time
 from PIL import Image
 import io
 import re
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 # ════════════════════════════════════════
@@ -22,10 +26,20 @@ import numpy as np
 # 캡처 출력 경로
 OUTPUT_DIR = r"C:\Users\user_name\Downloads\test_png_260417"
 
+# 동시에 띄울 헤드리스 Chrome 개수. 브라우저 1개당 ~300-500MB RAM.
+# RAM·CPU 여유에 맞춰 조정 (보통 4~8, 16GB RAM 이면 4~6 권장)
+MAX_WORKERS = 4
+
 # 캡처 대상 도메인 — 본인 환경의 브랜드/기업 도메인으로 변경
 TARGET_DOMAIN = "example.com"                        # 메인 글로벌 도메인 (host.endswith 매칭)
 TARGET_DOMAIN_CN = ("example.com.cn", "example.cn")  # 중국 사이트 — 별도 사이트코드 'CN' 부여
 TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드 들어가면 같은 브랜드로 인식
+
+# 캡처할 URL 목록 (한 줄에 하나, # 로 시작하면 주석 처리)
+URLS = """
+https://www.example.com/nz/offer/campaign-name-gift-ideas
+https://www.example.com/vn/offer/campaign-name
+"""
 
 # ════════════════════════════════════════
 # 내부 사용
@@ -371,28 +385,48 @@ def capture_page(url, device_type):
         driver.quit()
 
 # =========================
-# 여러 URL 순차 캡처
+# 여러 URL 병렬 캡처
 # =========================
-def capture_urls(urls):
+def capture_urls(urls, max_workers=MAX_WORKERS):
     if isinstance(urls,str):
         urls=[u.strip() for u in urls.split('\n') if u.strip() and not u.startswith('#')]
-    print(f"\n🚀 총 {len(urls)}개 페이지 캡처 시작\n")
+    # (url, device) 단위 태스크 — PC/MO 는 서로 독립이라 각각 별도 브라우저로 병렬 처리
+    tasks = [(u, dev) for u in urls for dev in ("PC", "MO")]
+    print(f"\n🚀 총 {len(urls)}개 페이지 × (PC/MO) = {len(tasks)}개 작업 병렬 캡처 시작 (동시 {max_workers}개)\n")
 
-    skipped_urls = []   # 리다이렉트로 skip된 URL
+    results = {}            # url -> {device: result}
+    progress = {"n": 0}
+    lock = threading.Lock()
+
+    def _run(task):
+        u, dev = task
+        r = capture_page(u, dev)
+        with lock:
+            progress["n"] += 1
+            # 스레드 로그가 섞이므로 완료 라인만 lock 으로 묶어 깔끔히 출력
+            print(f"  ✔ [{progress['n']}/{len(tasks)}] {dev} {u} → {r}")
+        return u, dev, r
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_run, t) for t in tasks]
+        for fut in as_completed(futures):
+            try:
+                u, dev, r = fut.result()
+            except Exception as e:
+                print(f"  ❌ 태스크 에러: {e}")
+                continue
+            results.setdefault(u, {})[dev] = r
+
+    # 입력 순서대로 skip / error 집계 (PC·MO 중 하나라도 해당되면 1번만 기록)
+    skipped_urls = []     # 리다이렉트로 skip된 URL
     error_page_urls = []  # 에러 페이지로 skip된 URL
-
-    for i,u in enumerate(urls,1):
-        print(f"[{i}/{len(urls)}] {u}")
-        result_pc = capture_page(u,"PC")
-        result_mo = capture_page(u,"MO")
-        # PC 또는 MO 중 하나라도 리다이렉트면 skip 기록 (중복 방지)
-        if "redirected" in (result_pc, result_mo):
+    for u in urls:
+        vals = tuple(results.get(u, {}).values())
+        if "redirected" in vals:
             skipped_urls.append(u)
-        elif "error_page" in (result_pc, result_mo):
+        elif "error_page" in vals:
             error_page_urls.append(u)
-        print()
 
-    import os
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     ts = datetime.now().strftime("%m%d_%H%M")
 
@@ -412,16 +446,5 @@ def capture_urls(urls):
 
     print("✨ 모든 캡처 완료!")
 
-# =========================
-# 사용 예시
-# =========================
-urls = """
-
-https://www.example.com/nz/offer/campaign-name-gift-ideas
-https://www.example.com/vn/offer/campaign-name
-
-
-"""
-
 if __name__ == "__main__":
-    capture_urls(urls)
+    capture_urls(URLS)

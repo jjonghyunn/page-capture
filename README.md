@@ -1,14 +1,15 @@
 # page_capture  
-<sub>2026-05-27  Jonghyun Park w/ Claude</sub>  
+<sub>2026-06-18  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
+URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄워 병렬로 캡처합니다.
 
 ## 파일 구성
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260522_v2.3.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260618_v2.4.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -16,10 +17,12 @@ PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 
 ## 사용 방법
 
 ### 1. 설정 상수 수정
-스크립트 상단의 `# 사용자가 바꿔야 하는 부분` 섹션에 출력 경로와 캡처 대상 도메인을 본인 환경에 맞게 변경합니다.
+스크립트 상단의 `# 사용자가 바꿔야 하는 부분` 섹션에 출력 경로, 동시 실행 개수, 캡처 대상 도메인, URL 목록을 본인 환경에 맞게 변경합니다.
 
 ```python
 OUTPUT_DIR = r"C:\Users\your_name\Downloads\captures"
+
+MAX_WORKERS = 4                                      # 동시에 띄울 헤드리스 Chrome 개수 (1개당 ~300-500MB RAM, 보통 4~8)
 
 TARGET_DOMAIN = "example.com"                        # 메인 글로벌 도메인
 TARGET_DOMAIN_CN = ("example.com.cn", "example.cn")  # 중국 사이트 — 별도 사이트코드 'CN' 부여
@@ -27,12 +30,12 @@ TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드
 ```
 
 ### 2. URL 목록 수정
-스크립트 하단 `urls` 변수에 캡처할 URL을 입력합니다.
+스크립트 상단 `URLS` 상수에 캡처할 URL을 한 줄에 하나씩 입력합니다 (`#` 로 시작하면 주석 처리). URL 수 × (PC/MO) 작업이 `MAX_WORKERS` 개씩 병렬 처리됩니다.
 
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260522_v2.3.py
+python page_capture_260618_v2.4.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -45,7 +48,7 @@ python page_capture_260522_v2.3.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260522_v2.3.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260618_v2.4.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -56,7 +59,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260522_v2.3.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260618_v2.4.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리

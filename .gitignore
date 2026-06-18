@@ -1,4 +1,15 @@
+# Python cache
 __pycache__/
 *.pyc
+
+# 캡처 출력물 (PNG / MHTML / skip 로그)
 *.png
+*.mhtml
 output/
+skipped_redirect_*.txt
+skipped_error_page_*.txt
+
+# 작업/검증 잔재
+*test*
+*backup*
+*(편집)*
