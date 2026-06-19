@@ -4,6 +4,7 @@
 # 2026-04-29  user_id w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
 # 2026-05-22  user_id w/ Claude  — v2.3 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (TARGET_DOMAIN / TARGET_DOMAIN_CN / TARGET_BRAND_KEYWORD) + 설정 상수 파일 상단으로 이동
 # 2026-06-18  user_id w/ Claude  — v2.4 캡처를 ThreadPoolExecutor 로 병렬화 (MAX_WORKERS) + URL 목록 상단 상수(URLS)로 이동
+# 2026-06-19  user_id w/ Claude  — v2.4 MAX_WORKERS 사양별 권장값 주석 보강
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -27,7 +28,14 @@ import numpy as np
 OUTPUT_DIR = r"C:\Users\user_name\Downloads\test_png_260417"
 
 # 동시에 띄울 헤드리스 Chrome 개수. 브라우저 1개당 ~300-500MB RAM.
-# RAM·CPU 여유에 맞춰 조정 (보통 4~8, 16GB RAM 이면 4~6 권장)
+# 한계: ① RAM (워커수 × ~0.5GB) ② CPU 논리프로세서 수(초과분은 효과 없이 task당 시간만 늘어남)
+#       ③ 대상 서버 throttle(동시 요청 과다 시 리다이렉트/타임아웃 헛 skip ↑) → 무한정 못 올림.
+# 사양별 권장값 (논리프로세서 수와 "여유 RAM ÷ 0.5GB" 중 작은 값 근처가 상한):
+#   • 8GB RAM 저사양                     → 2~4 (그 이상은 스왑으로 오히려 느려짐)
+#   • 16GB RAM / 4코어8논리 노트북        → 4~6
+#   • 32GB RAM / 6코어12논리 데스크탑     → 8~10
+#   • 32GB+ / 8코어16논리 이상            → 12~14
+#   • OneDrive·오피스·브라우저 등 다른 앱이 떠 있으면 여유 RAM 이 줄어드니 1~2 낮춰 잡을 것
 MAX_WORKERS = 4
 
 # 캡처 대상 도메인 — 본인 환경의 브랜드/기업 도메인으로 변경
