@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-06-19  Jonghyun Park w/ Claude</sub>  
+<sub>2026-06-22  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -65,6 +65,32 @@ schtasks /create /tn page_capture ^
 ### 5. PNG 정리
 캡처 완료 후 `foldering_move_png.py`를 실행하면  
 사이트코드별 하위 폴더로 자동 분류됩니다.
+
+## 입력 · 출력 예시
+
+**입력** — 스크립트 상단 `URLS` 에 한 줄에 하나씩 (빈 줄 / `#` 시작은 무시):
+
+```python
+URLS = """
+https://www.example.com/nz/offer/campaign-name-gift-ideas
+https://www.example.com/vn/offer/campaign-name
+# https://www.example.com/au/offer/old-page   ← 주석 처리되어 스킵
+"""
+```
+
+**출력** — URL 1개당 PC / MO 뷰 각각 PNG + MHTML 이 `OUTPUT_DIR` 에 저장됩니다.
+파일명 형식: `{사이트코드}_{PC|MO}_{경로}_page_{쿼리}_{시각}.png` (쿼리 없으면 `_{쿼리}` 생략)
+
+```
+NZ_PC_offer_campaign-name-gift-ideas_page_1430.png
+NZ_MO_offer_campaign-name-gift-ideas_page_1430.png
+VN_PC_offer_campaign-name_page_1430.png
+VN_MO_offer_campaign-name_page_1430.png
+```
+
+- 사이트코드는 host 의 국가 경로에서 자동 추출 (`TARGET_DOMAIN_CN` 매칭이면 `CN`).
+- 리다이렉트/에러로 스킵된 URL 은 `skipped_redirect_{ts}.txt` / `skipped_error_page_{ts}.txt` 로 기록됩니다.
+- 캡처 후 `foldering_move_png.py` 를 돌리면 위 PNG 들이 사이트코드별 하위 폴더로 정리됩니다.
 
 ## 요구사항
 
