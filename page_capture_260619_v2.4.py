@@ -1,4 +1,4 @@
-# page_capture_260618_v2.4.py
+# page_capture_260619_v2.4.py
 # 2026-04-17  user_id w/ Claude  — v2.0 초기 버전
 # 2026-04-20  user_id w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  user_id w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
