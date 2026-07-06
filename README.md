@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-06-22  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-06  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260619_v2.4.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260706_v2.5.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -35,7 +35,7 @@ TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260619_v2.4.py
+python page_capture_260706_v2.5.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -48,7 +48,7 @@ python page_capture_260619_v2.4.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260619_v2.4.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260706_v2.5.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -59,7 +59,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260619_v2.4.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260706_v2.5.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리

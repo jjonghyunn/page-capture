@@ -1,10 +1,11 @@
-# page_capture_260619_v2.4.py
+# page_capture_260706_v2.5.py
 # 2026-04-17  user_id w/ Claude  — v2.0 초기 버전
 # 2026-04-20  user_id w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  user_id w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
 # 2026-05-22  user_id w/ Claude  — v2.3 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (TARGET_DOMAIN / TARGET_DOMAIN_CN / TARGET_BRAND_KEYWORD) + 설정 상수 파일 상단으로 이동
 # 2026-06-18  user_id w/ Claude  — v2.4 캡처를 ThreadPoolExecutor 로 병렬화 (MAX_WORKERS) + URL 목록 상단 상수(URLS)로 이동
 # 2026-06-19  user_id w/ Claude  — v2.4 MAX_WORKERS 사양별 권장값 주석 보강
+# 2026-07-06  user_id w/ Claude  — v2.5 is_error_page 오탐 수정: aiscPrivateError 는 is_displayed 로, ERR_ 문자열은 title 빈 경우로 한정 (정상 페이지가 error_page 로 skip 되던 문제)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -225,17 +226,22 @@ def is_error_page(driver) -> bool:
     except:
         pass
 
-    # 3. SEC(한국) 전용 에러 구조: aiscPrivateError 요소 존재
+    # 3. SEC(한국) 전용 에러 구조: aiscPrivateError 요소가 "실제로 표시"된 경우만
+    #    ⚠ 정상 SEC 페이지도 이 에러 컨테이너를 hidden 으로 DOM 에 품고 있어,
+    #      find_elements(존재 여부)만 보면 정상 페이지가 오탐되어 skip 된다.
+    #      → is_displayed() 로 화면에 실제 노출된 경우로 한정.
     try:
-        if driver.find_elements(By.ID, 'aiscPrivateError'):
+        if any(e.is_displayed() for e in driver.find_elements(By.ID, 'aiscPrivateError')):
             return True
     except:
         pass
 
     # 4. Chrome 브라우저 에러 페이지 (ERR_TOO_MANY_REDIRECTS 등 네트워크 에러)
+    #    ⚠ 정상 페이지 본문/스크립트에 ERR_ 문자열이 우연히 있어도 오탐하지 않도록,
+    #      Chrome 에러 인터스티셜(=title 이 비어있음)인 경우로 한정.
     try:
         src = driver.page_source
-        if src and any(e in src for e in ('ERR_TOO_MANY_REDIRECTS', 'ERR_CONNECTION', 'ERR_NAME_NOT_RESOLVED', 'ERR_TIMED_OUT')):
+        if src and not (driver.title or '').strip() and any(e in src for e in ('ERR_TOO_MANY_REDIRECTS', 'ERR_CONNECTION', 'ERR_NAME_NOT_RESOLVED', 'ERR_TIMED_OUT')):
             return True
     except:
         pass
