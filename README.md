@@ -79,13 +79,13 @@ https://www.example.com/vn/offer/campaign-name
 ```
 
 **출력** — URL 1개당 PC / MO 뷰 각각 PNG + MHTML 이 `OUTPUT_DIR` 에 저장됩니다.
-파일명 형식: `{사이트코드}_{PC|MO}_{경로}_page_{쿼리}_{시각}.png` (쿼리 없으면 `_{쿼리}` 생략)
+파일명 형식: `{사이트코드}_{PC|MO}_{경로}_page_{쿼리}_{날짜}.png` (쿼리 없으면 `_{쿼리}` 생략, `{날짜}`는 캡처일 `MMDD`)
 
 ```
-NZ_PC_offer_campaign-name-gift-ideas_page_1430.png
-NZ_MO_offer_campaign-name-gift-ideas_page_1430.png
-VN_PC_offer_campaign-name_page_1430.png
-VN_MO_offer_campaign-name_page_1430.png
+NZ_PC_offer_campaign-name-gift-ideas_page_0706.png
+NZ_MO_offer_campaign-name-gift-ideas_page_0706.png
+VN_PC_offer_campaign-name_page_0706.png
+VN_MO_offer_campaign-name_page_0706.png
 ```
 
 - 사이트코드는 host 의 국가 경로에서 자동 추출 (`TARGET_DOMAIN_CN` 매칭이면 `CN`).
@@ -107,6 +107,19 @@ pip install selenium Pillow numpy
 1. Chrome 버전 확인 (`chrome://settings/help`)
 2. https://googlechromelabs.github.io/chrome-for-testing/ 에서 동일 버전 다운로드
 3. `chromedriver.exe`를 PATH에 추가하거나 스크립트와 같은 폴더에 배치
+
+## 변경 이력
+
+| 버전 | 날짜 | 변경 |
+|---|---|---|
+| v2.0 | 2026-04-17 | 초기 버전 |
+| v2.1 | 2026-04-20 | `is_error_page` 다국어 에러 감지 강화 + `/common/404/` + Chrome ERR 감지 |
+| v2.2 | 2026-04-29 | filename에 `OUTPUT_DIR` 변수 사용 + raw string 적용 + 파일명 정리 |
+| v2.3 | 2026-05-22 | 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (`TARGET_DOMAIN` / `TARGET_DOMAIN_CN` / `TARGET_BRAND_KEYWORD`) + 설정 상수 상단 이동 |
+| v2.4 | 2026-06-18 | 캡처를 `ThreadPoolExecutor`로 병렬화 (`MAX_WORKERS`) + URL 목록 상단 상수(`URLS`)로 이동 |
+| v2.5 | 2026-07-06 | `is_error_page` 오탐 수정 (정상 페이지가 error로 skip 되던 문제) |
+
+> 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
 ## License
 
