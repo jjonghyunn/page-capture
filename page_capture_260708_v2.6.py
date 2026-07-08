@@ -1,4 +1,4 @@
-# page_capture_260706_v2.5.py
+# page_capture_260708_v2.6.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -6,6 +6,7 @@
 # 2026-06-18  Jonghyun Park w/ Claude  — v2.4 캡처를 ThreadPoolExecutor 로 병렬화 (MAX_WORKERS) + URL 목록 상단 상수(URLS)로 이동
 # 2026-06-19  Jonghyun Park w/ Claude  — v2.4 MAX_WORKERS 사양별 권장값 주석 보강
 # 2026-07-06  Jonghyun Park w/ Claude  — v2.5 is_error_page 오탐 수정: aiscPrivateError 는 is_displayed 로, ERR_ 문자열은 title 빈 경우로 한정 (정상 페이지가 error_page 로 skip 되던 문제)
+# 2026-07-08  Jonghyun Park w/ Claude  — v2.6 perf log 로 메인 문서 HTTP status 감지 추가 (비영어 404 가 is_error_page 를 빠져나가 캡처되던 문제)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -18,6 +19,7 @@ from PIL import Image
 import io
 import re
 import os
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
@@ -43,6 +45,7 @@ MAX_WORKERS = 4
 TARGET_DOMAIN = "example.com"                        # 메인 글로벌 도메인 (host.endswith 매칭)
 TARGET_DOMAIN_CN = ("example.com.cn", "example.cn")  # 중국 사이트 — 별도 사이트코드 'CN' 부여
 TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드 들어가면 같은 브랜드로 인식
+HQ_SITE_CODE = "hq"                                  # 본사(HQ) 사이트 path 세그먼트 — 이 사이트만 렌더가 무거워 추가 대기
 
 # 캡처할 URL 목록 (한 줄에 하나, # 로 시작하면 주석 처리)
 URLS = """
@@ -169,11 +172,11 @@ def accept_cookies(driver):
         print(f"  ⚠️ 쿠키 처리 에러: {e}")
         return False
 
-def is_sec_path(url: str) -> bool:
+def is_hq_path(url: str) -> bool:
     p = urlparse(url)
     host = p.netloc.lower().replace('www.', '')
     parts = [x for x in p.path.split('/') if x]
-    return host.endswith(TARGET_DOMAIN) and len(parts) >= 1 and parts[0] == 'sec'
+    return host.endswith(TARGET_DOMAIN) and len(parts) >= 1 and parts[0] == HQ_SITE_CODE
 
 def wait_dom_settled(driver, timeout=20):
     end = time.time() + timeout
@@ -207,7 +210,7 @@ def wait_key_elements(driver, timeout=15):
 _ERROR_TITLE_KEYWORDS = ['error', '404', '502', '503', 'bad gateway', 'page not found', 'not available']
 
 def is_error_page(driver) -> bool:
-    """에러/없는 페이지 여부 판단 (title + canonical URL + SEC 전용 요소)"""
+    """에러/없는 페이지 여부 판단 (title + canonical URL + HQ 전용 요소)"""
     # 1. 영어 title 키워드 (기존)
     try:
         title = driver.title.lower().strip()
@@ -226,8 +229,8 @@ def is_error_page(driver) -> bool:
     except:
         pass
 
-    # 3. SEC(한국) 전용 에러 구조: aiscPrivateError 요소가 "실제로 표시"된 경우만
-    #    ⚠ 정상 SEC 페이지도 이 에러 컨테이너를 hidden 으로 DOM 에 품고 있어,
+    # 3. HQ(본사) 전용 에러 구조: aiscPrivateError 요소가 "실제로 표시"된 경우만
+    #    ⚠ 정상 HQ 페이지도 이 에러 컨테이너를 hidden 으로 DOM 에 품고 있어,
     #      find_elements(존재 여부)만 보면 정상 페이지가 오탐되어 skip 된다.
     #      → is_displayed() 로 화면에 실제 노출된 경우로 한정.
     try:
@@ -247,6 +250,31 @@ def is_error_page(driver) -> bool:
         pass
 
     return False
+
+def get_main_document_status(driver, final_url):
+    """perf log에서 메인 문서(Document) 응답의 HTTP status 반환. 못 찾으면 None.
+    Selenium 은 status 를 직접 안 줘서, chromedriver 의 performance log 로
+    Network.responseReceived 이벤트를 파싱해 메인 프레임 응답 코드를 얻는다."""
+    def _n(u): return (u or "").split('#')[0].rstrip('/')
+    target = _n(final_url)
+    status = None
+    try:
+        for entry in driver.get_log("performance"):
+            try:
+                msg = json.loads(entry["message"])["message"]
+            except Exception:
+                continue
+            if msg.get("method") != "Network.responseReceived":
+                continue
+            p = msg.get("params", {})
+            if p.get("type") != "Document":           # iframe/XHR 제외, 메인 문서만
+                continue
+            resp = p.get("response", {})
+            if _n(resp.get("url")) == target:          # 최종 문서 url 매칭
+                status = resp.get("status")            # 여러 개면 마지막(최종) 사용
+    except Exception:
+        pass
+    return status
 
 # =========================
 # 스크린샷 / 스크롤
@@ -317,6 +345,8 @@ def capture_page(url, device_type):
     else:
         vw, vh = 1920, 1080
     chrome_options.add_argument(f'--window-size={vw},{vh}')
+    # perf log 활성화 → Network.responseReceived 로 메인 문서 HTTP status 획득 (404 감지용)
+    chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
     driver = webdriver.Chrome(options=chrome_options)
 
@@ -337,6 +367,14 @@ def capture_page(url, device_type):
             print(f"      원본: {url}")
             print(f"      이동: {final_url}")
             return "redirected"
+
+        # ── HTTP 상태코드 감지 (404/5xx) — 언어·마크업 무관 ──────
+        # Selenium 은 status 를 직접 안 줘서 perf log 로 메인 문서 응답 status 확인.
+        # 비영어 error 페이지(예: 본사/HQ 사이트)라 is_error_page 가 못 잡는 진짜 404 를 잡는다.
+        status = get_main_document_status(driver, final_url)
+        if status is not None and status >= 400:
+            print(f"  ⛔ HTTP {status} 감지 → skip")
+            return "error_page"
 
         # ── 에러 페이지 감지 (404 / 502 / company_name error 등) ─────
         if is_error_page(driver):
