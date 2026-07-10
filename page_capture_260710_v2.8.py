@@ -1,4 +1,4 @@
-# page_capture_260710_v2.7.py
+# page_capture_260710_v2.8.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -8,6 +8,7 @@
 # 2026-07-06  Jonghyun Park w/ Claude  — v2.5 is_error_page 오탐 수정: aiscPrivateError 는 is_displayed 로, ERR_ 문자열은 title 빈 경우로 한정 (정상 페이지가 error_page 로 skip 되던 문제)
 # 2026-07-08  Jonghyun Park w/ Claude  — v2.6 perf log 로 메인 문서 HTTP status 감지 추가 (비영어 404 가 is_error_page 를 빠져나가 캡처되던 문제)
 # 2026-07-10  Jonghyun Park w/ Claude  — v2.7 perf log 활성화 후 --headless=new 가 빈 흰 창을 띄우는 문제 → --window-position 으로 창을 화면 밖으로 이동
+# 2026-07-10  Jonghyun Park w/ Claude  — v2.8 PC 캡처 분기의 미정의 호출 is_sec_path → is_hq_path 로 수정(매 PC 캡처 NameError 로 skip 되던 문제) + OUTPUT_DIR 기본값을 captures 로 정리
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -29,7 +30,7 @@ import numpy as np
 # 사용자가 바꿔야 하는 부분
 # ════════════════════════════════════════
 # 캡처 출력 경로
-OUTPUT_DIR = r"C:\Users\user_name\Downloads\test_png_260417"
+OUTPUT_DIR = r"C:\Users\user_name\Downloads\captures"
 
 # 동시에 띄울 헤드리스 Chrome 개수. 브라우저 1개당 ~300-500MB RAM.
 # 한계: ① RAM (워커수 × ~0.5GB) ② CPU 논리프로세서 수(초과분은 효과 없이 task당 시간만 늘어남)
@@ -401,7 +402,7 @@ def capture_page(url, device_type):
             img = capture_full_page_mobile(driver, vw)
             img.save(filename,'PNG',optimize=True,quality=95)
         else:
-            if is_sec_path(url):
+            if is_hq_path(url):
                 time.sleep(5)
                 wait_dom_settled(driver)
                 wait_key_elements(driver)

@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260710_v2.7.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260710_v2.8.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -20,7 +20,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 스크립트 상단의 `# 사용자가 바꿔야 하는 부분` 섹션에 출력 경로, 동시 실행 개수, 캡처 대상 도메인, URL 목록을 본인 환경에 맞게 변경합니다.
 
 ```python
-OUTPUT_DIR = r"C:\Users\your_name\Downloads\captures"
+OUTPUT_DIR = r"C:\Users\user_name\Downloads\captures"
 
 MAX_WORKERS = 4                                      # 동시 헤드리스 Chrome 수 (1개당 ~300-500MB RAM). 사양별 권장값은 스크립트 주석 참고 (16GB→4~6, 32GB→8~10)
 
@@ -35,7 +35,7 @@ TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260710_v2.7.py
+python page_capture_260710_v2.8.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -48,7 +48,7 @@ python page_capture_260710_v2.7.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260710_v2.7.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260710_v2.8.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -59,12 +59,14 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260710_v2.7.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260710_v2.8.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
 캡처 완료 후 `foldering_move_png.py`를 실행하면  
 사이트코드별 하위 폴더로 자동 분류됩니다.
+
+> ⚠️ **MO(모바일) 파일을 먼저 옮긴 뒤 실행하세요.** 정리 스크립트는 PC/MO 를 구분하지 않으므로, 같은 폴더에 섞여 있으면 의도치 않게 함께 분류됩니다.
 
 ## 입력 · 출력 예시
 
@@ -120,6 +122,7 @@ pip install selenium Pillow numpy
 | v2.5 | 2026-07-06 | `is_error_page` 오탐 수정 (정상 페이지가 error로 skip 되던 문제) |
 | v2.6 | 2026-07-08 | perf log로 메인 문서 HTTP status 감지 추가 (비영어 404가 `is_error_page`를 빠져나가 캡처되던 문제) |
 | v2.7 | 2026-07-10 | perf log 활성화 후 `--headless=new` 가 빈 창을 띄우는 문제 → `--window-position` 으로 창을 화면 밖으로 이동 |
+| v2.8 | 2026-07-10 | PC 캡처 분기의 미정의 호출 `is_sec_path` → `is_hq_path` 로 수정 (매 PC 캡처가 `NameError` 로 skip 되던 문제) + `OUTPUT_DIR` 기본값 `captures` 로 정리 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
