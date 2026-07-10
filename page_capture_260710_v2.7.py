@@ -1,4 +1,4 @@
-# page_capture_260708_v2.6.py
+# page_capture_260710_v2.7.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -7,6 +7,7 @@
 # 2026-06-19  Jonghyun Park w/ Claude  — v2.4 MAX_WORKERS 사양별 권장값 주석 보강
 # 2026-07-06  Jonghyun Park w/ Claude  — v2.5 is_error_page 오탐 수정: aiscPrivateError 는 is_displayed 로, ERR_ 문자열은 title 빈 경우로 한정 (정상 페이지가 error_page 로 skip 되던 문제)
 # 2026-07-08  Jonghyun Park w/ Claude  — v2.6 perf log 로 메인 문서 HTTP status 감지 추가 (비영어 404 가 is_error_page 를 빠져나가 캡처되던 문제)
+# 2026-07-10  Jonghyun Park w/ Claude  — v2.7 perf log 활성화 후 --headless=new 가 빈 흰 창을 띄우는 문제 → --window-position 으로 창을 화면 밖으로 이동
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -337,6 +338,8 @@ def capture_page(url, device_type):
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--hide-scrollbars')
+    # perf log(goog:loggingPrefs) 활성화 후 --headless=new 가 빈 창을 띄우는 현상 방지 → 창을 화면 밖으로
+    chrome_options.add_argument('--window-position=-32000,-32000')
 
     if device_type == "MO":
         ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
