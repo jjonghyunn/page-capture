@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-10  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-13  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -27,6 +27,7 @@ MAX_WORKERS = 4                                      # 동시 헤드리스 Chrom
 TARGET_DOMAIN = "example.com"                        # 메인 글로벌 도메인
 TARGET_DOMAIN_CN = ("example.com.cn", "example.cn")  # 중국 사이트 — 별도 사이트코드 'CN' 부여
 TARGET_BRAND_KEYWORD = "example"                     # host 안에 이 키워드 들어가면 같은 브랜드로 인식
+HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼트 — 이 사이트만 렌더가 무거워 PC 캡처 시 추가 대기
 ```
 
 ### 2. URL 목록 수정
@@ -68,6 +69,8 @@ schtasks /create /tn page_capture ^
 
 > ⚠️ **MO(모바일) 파일을 먼저 옮긴 뒤 실행하세요.** 정리 스크립트는 PC/MO 를 구분하지 않으므로, 같은 폴더에 섞여 있으면 의도치 않게 함께 분류됩니다.
 
+> 참고: `foldering_move_png.py` 는 `.png` 만 이동합니다. 함께 저장된 `.mhtml` 은 `OUTPUT_DIR` 에 그대로 남으므로 필요 시 수동 정리하세요.
+
 ## 입력 · 출력 예시
 
 **입력** — 스크립트 상단 `URLS` 에 한 줄에 하나씩 (빈 줄 / `#` 시작은 무시):
@@ -100,6 +103,8 @@ VN_MO_offer_campaign-name_page_0706.png
 
 ```bash
 pip install selenium Pillow numpy
+# 또는
+pip install -r requirements.txt
 ```
 
 ### ChromeDriver
