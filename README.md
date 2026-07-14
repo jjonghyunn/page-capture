@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-13  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-14  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -109,7 +109,9 @@ pip install -r requirements.txt
 
 ### ChromeDriver
 
-설치된 Chrome 브라우저 버전과 동일한 ChromeDriver가 필요합니다.
+Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 ChromeDriver를 자동으로 내려받아 관리하므로, 보통 수동 설치가 필요 없습니다. (코드도 `webdriver.Chrome(options=...)` 로 드라이버 경로를 지정하지 않음)
+
+버전 불일치 등으로 자동 해결이 실패할 때만 수동 배치:
 
 1. Chrome 버전 확인 (`chrome://settings/help`)
 2. https://googlechromelabs.github.io/chrome-for-testing/ 에서 동일 버전 다운로드
@@ -124,6 +126,7 @@ pip install -r requirements.txt
 | v2.2 | 2026-04-29 | filename에 `OUTPUT_DIR` 변수 사용 + raw string 적용 + 파일명 정리 |
 | v2.3 | 2026-05-22 | 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (`TARGET_DOMAIN` / `TARGET_DOMAIN_CN` / `TARGET_BRAND_KEYWORD`) + 설정 상수 상단 이동 |
 | v2.4 | 2026-06-18 | 캡처를 `ThreadPoolExecutor`로 병렬화 (`MAX_WORKERS`) + URL 목록 상단 상수(`URLS`)로 이동 |
+| v2.4 | 2026-06-19 | `MAX_WORKERS` 사양별 권장값 주석 보강 |
 | v2.5 | 2026-07-06 | `is_error_page` 오탐 수정 (정상 페이지가 error로 skip 되던 문제) |
 | v2.6 | 2026-07-08 | perf log로 메인 문서 HTTP status 감지 추가 (비영어 404가 `is_error_page`를 빠져나가 캡처되던 문제) |
 | v2.7 | 2026-07-10 | perf log 활성화 후 `--headless=new` 가 빈 창을 띄우는 문제 → `--window-position` 으로 창을 화면 밖으로 이동 |
