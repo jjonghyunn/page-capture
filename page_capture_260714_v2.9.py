@@ -1,4 +1,4 @@
-# page_capture_260710_v2.8.py
+# page_capture_260714_v2.9.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -9,6 +9,7 @@
 # 2026-07-08  Jonghyun Park w/ Claude  — v2.6 perf log 로 메인 문서 HTTP status 감지 추가 (비영어 404 가 is_error_page 를 빠져나가 캡처되던 문제)
 # 2026-07-10  Jonghyun Park w/ Claude  — v2.7 perf log 활성화 후 --headless=new 가 빈 흰 창을 띄우는 문제 → --window-position 으로 창을 화면 밖으로 이동
 # 2026-07-10  Jonghyun Park w/ Claude  — v2.8 PC 캡처 분기의 미정의 호출 is_sec_path → is_hq_path 로 수정(매 PC 캡처 NameError 로 skip 되던 문제) + OUTPUT_DIR 기본값을 captures 로 정리
+# 2026-07-14  Jonghyun Park w/ Claude  — v2.9 unknown(soft-404) 페이지 skip 추가: 메인 도메인이 존재하지 않는 경로에 HTTP 200 + 홈 fallback 을 주는 경우 <meta property="og:url"> 이 비었거나(EMPTY) 아예 없음(MISSING) → is_unknown_page 로 감지해 skip (리다이렉트/HTTP status/기존 error 마커로 안 잡히던 200 케이스)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -278,6 +279,30 @@ def get_main_document_status(driver, final_url):
         pass
     return status
 
+# 메인 마케팅 도메인(www.TARGET_DOMAIN)에서 "unknown(soft-404)" 페이지를 감지할 host
+# (shop.* 등 서브도메인·중국 사이트는 원래 og:url 이 없을 수 있어 제외 — 오탐 방지)
+_OG_CHECK_HOSTS = {TARGET_DOMAIN, "www." + TARGET_DOMAIN}
+
+def is_unknown_page(driver, url) -> bool:
+    """존재하지 않는 경로인데 메인 도메인이 HTTP 200 + 홈 fallback 을 돌려주는
+    '알 수 없는 페이지' 감지. 정상 페이지는 <meta property="og:url"> 가 실제 URL 로
+    채워지지만, 이런 fallback 페이지는 그 값이 비어있거나(EMPTY) 태그가 아예 없다(MISSING).
+    → 리다이렉트/HTTP status/기존 error 마커로는 안 잡히는(200) 케이스를 여기서 걸러 skip."""
+    try:
+        host = urlparse(url).netloc.lower()
+    except Exception:
+        return False
+    if host not in _OG_CHECK_HOSTS:
+        return False
+    try:
+        og = driver.execute_script(
+            "var el=document.querySelector('meta[property=\"og:url\"]');"
+            "return el ? (el.getAttribute('content') || '') : '__MISSING__';"
+        )
+    except Exception:
+        return False
+    return og == '__MISSING__' or (og or '').strip() == ''
+
 # =========================
 # 스크린샷 / 스크롤
 # =========================
@@ -385,6 +410,12 @@ def capture_page(url, device_type):
             print(f"  ⛔ 에러 페이지 감지 (title: '{driver.title}') → skip")
             return "error_page"
 
+        # ── unknown(soft-404) 페이지 감지 (HTTP 200 인데 og:url 없음 → 홈 fallback) ─
+        # 존재하지 않는 경로가 200 을 주고 홈 컨텐츠를 렌더해 위 감지들을 다 빠져나가는 케이스.
+        if is_unknown_page(driver, final_url):
+            print(f"  ⛔ unknown 페이지 감지 (og:url 비었음/없음, title: '{driver.title}') → skip")
+            return "unknown_page"
+
         close_popups(driver)
         accept_cookies(driver)
         time.sleep(2)
@@ -476,12 +507,15 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     # 입력 순서대로 skip / error 집계 (PC·MO 중 하나라도 해당되면 1번만 기록)
     skipped_urls = []     # 리다이렉트로 skip된 URL
     error_page_urls = []  # 에러 페이지로 skip된 URL
+    unknown_page_urls = []  # unknown(soft-404, og:url 없음) 으로 skip된 URL
     for u in urls:
         vals = tuple(results.get(u, {}).values())
         if "redirected" in vals:
             skipped_urls.append(u)
         elif "error_page" in vals:
             error_page_urls.append(u)
+        elif "unknown_page" in vals:
+            unknown_page_urls.append(u)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     ts = datetime.now().strftime("%m%d_%H%M")
@@ -499,6 +533,13 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
         with open(err_path, "w", encoding="utf-8") as f:
             f.write("\n".join(error_page_urls) + "\n")
         print(f"⛔ 에러 페이지 skip {len(error_page_urls)}개 → {err_path}")
+
+    # ── unknown(soft-404) 페이지 URL을 txt 파일로 저장 ────────
+    if unknown_page_urls:
+        unk_path = f"{OUTPUT_DIR}/skipped_unknown_page_{ts}.txt"
+        with open(unk_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(unknown_page_urls) + "\n")
+        print(f"⛔ unknown 페이지 skip {len(unknown_page_urls)}개 → {unk_path}")
 
     print("✨ 모든 캡처 완료!")
 
