@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260714_v2.9.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260720_v3.0.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260714_v2.9.py
+python page_capture_260720_v3.0.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260714_v2.9.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260714_v2.9.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260720_v3.0.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260714_v2.9.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260720_v3.0.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
@@ -94,7 +94,9 @@ VN_MO_offer_campaign-name_page_0706.png
 ```
 
 - 사이트코드는 URL path 의 첫 국가 세그먼트에서 추출 (`/nz/` → `NZ`). `TARGET_DOMAIN_CN` 매칭 도메인은 host 기준으로 `CN`, path 가 없으면 `GLOBAL` 로 fallback.
-- 리다이렉트/에러/unknown 으로 스킵된 URL 은 `skipped_redirect_{ts}.txt` / `skipped_error_page_{ts}.txt` / `skipped_unknown_page_{ts}.txt` 로 기록됩니다.
+- 리다이렉트/에러/unknown/로그인 으로 스킵된 URL 은 `skipped_redirect_{ts}.txt` / `skipped_error_page_{ts}.txt` / `skipped_unknown_page_{ts}.txt` / `skipped_login_page_{ts}.txt` 로 기록됩니다.
+- **`result_{ts}.csv`** 에는 `(url, device)` 단위로 `result / final_url / http_status / title / detail / elapsed` 가 남습니다. txt 는 URL 단위라 "PC 는 정상인데 MO 만 실패" 를 구분하지 못하고 `error`/`timeout` 은 아예 기록되지 않으므로, 재실행 대상 파악에는 이 CSV 를 쓰세요.
+- 같은 날 다시 실행하면 이미 있는 PNG+MHTML 은 건너뜁니다(`SKIP_IF_EXISTS`). 중단 후 이어받기가 목적이며, 다시 받고 싶으면 파일을 지우거나 옵션을 끄면 됩니다.
 - 캡처 후 `foldering_move_png.py` 를 돌리면 위 PNG 들이 사이트코드별 하위 폴더로 정리됩니다.
 
 ## 요구사항
@@ -132,6 +134,12 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v2.7 | 2026-07-10 | perf log 활성화 후 `--headless=new` 가 빈 창을 띄우는 문제 → `--window-position` 으로 창을 화면 밖으로 이동 |
 | v2.8 | 2026-07-10 | PC 캡처 분기의 미정의 호출 `is_sec_path` → `is_hq_path` 로 수정 (매 PC 캡처가 `NameError` 로 skip 되던 문제) + `OUTPUT_DIR` 기본값 `captures` 로 정리 |
 | v2.9 | 2026-07-14 | unknown(soft-404) 페이지 skip 추가 — 메인 도메인이 존재하지 않는 경로에 HTTP 200 + 홈 fallback 을 줄 때 `<meta property="og:url">` 이 비었거나 없음을 `is_unknown_page` 로 감지해 skip (리다이렉트/HTTP status/error 마커로 안 잡히던 케이스) + `skipped_unknown_page_{ts}.txt` 기록 |
+| v3.0 | 2026-07-20 | **버그**: 출력 폴더 생성을 캡처 시작 전으로 이동(폴더가 없으면 저장이 전량 실패), URL 주석 필터를 `strip()` 후 판정(들여쓴 `#` 줄이 URL 로 유입), Chrome 생성을 `try` 안으로(기동 실패 시 결과 집계에서 누락), `except:` → `except Exception:`(Ctrl+C 중단 가능), page load/script timeout 추가 |
+| v3.0 | 2026-07-20 | **결과기록**: `(url, device)` 단위 `result_{ts}.csv` 추가 — 디바이스별 skip 사유·최종 URL·HTTP status·소요시간 기록 |
+| v3.0 | 2026-07-20 | **로그인 화면 skip**: 쿠키·팝업 처리 중 늦게 로그인 페이지로 이동하는 경우 초기 리다이렉트 판정을 빠져나가 로그인 화면이 캡처물로 저장되던 문제 → 저장 직전 URL 재확인 + `SKIP_URL_KEYWORDS` (`RECHECK_URL_BEFORE_SAVE`) |
+| v3.0 | 2026-07-20 | **속도**: 워커별 Chrome 재사용(`REUSE_DRIVER`), 이어하기(`SKIP_IF_EXISTS`), 일시적 실패만 재시도(`RETRY_COUNT`), MHTML 크기 검증(`MIN_MHTML_BYTES`) |
+| v3.0 | 2026-07-20 | **리다이렉트 정규화**: 후행 슬래시만 무시하던 비교를 `#fragment`·추적 파라미터(`utm_*`/`gclid`)·`www.`·대소문자·기본 포트·`http↔https`·퍼센트 인코딩·쿼리 순서까지 무시하도록 변경 — 정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제 |
+| v3.0 | 2026-07-20 | **CDP 전체캡처(기본 OFF)**: `Page.captureScreenshot(captureBeyondViewport)` 경로 추가. 높이는 정확하지만 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나오므로 `USE_CDP_FULLPAGE=False` 가 기본. 이미지 로딩 완료 대기를 구현하기 전까지 켜지 말 것 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
