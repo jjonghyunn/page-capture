@@ -93,7 +93,7 @@ VN_PC_offer_campaign-name_page_0706.png
 VN_MO_offer_campaign-name_page_0706.png
 ```
 
-- 사이트코드는 host 의 국가 경로에서 자동 추출 (`TARGET_DOMAIN_CN` 매칭이면 `CN`).
+- 사이트코드는 URL path 의 첫 국가 세그먼트에서 추출 (`/nz/` → `NZ`). `TARGET_DOMAIN_CN` 매칭 도메인은 host 기준으로 `CN`, path 가 없으면 `GLOBAL` 로 fallback.
 - 리다이렉트/에러/unknown 으로 스킵된 URL 은 `skipped_redirect_{ts}.txt` / `skipped_error_page_{ts}.txt` / `skipped_unknown_page_{ts}.txt` 로 기록됩니다.
 - 캡처 후 `foldering_move_png.py` 를 돌리면 위 PNG 들이 사이트코드별 하위 폴더로 정리됩니다.
 
