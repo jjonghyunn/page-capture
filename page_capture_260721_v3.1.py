@@ -1,4 +1,4 @@
-# page_capture_260720_v3.0.py
+# page_capture_260721_v3.1.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -16,6 +16,7 @@
 # 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [속도] 워커별 Chrome 재사용(REUSE_DRIVER) + 이어하기(SKIP_IF_EXISTS: 같은 날 PNG+MHTML 이 있으면 건너뜀) + 일시적 실패만 재시도(RETRY_COUNT) + MHTML 크기 검증(mhtml_failed)
 # 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [리다이렉트 정규화] 후행 슬래시만 무시하던 비교를 #fragment·추적파라미터(utm_*/gclid)·www·대소문자·기본포트·http↔https·퍼센트인코딩·쿼리순서까지 무시하도록 변경 (정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제)
 # 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [CDP 전체캡처] Page.captureScreenshot(captureBeyondViewport) 경로를 추가했으나 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나옴 → 기본 OFF(USE_CDP_FULLPAGE=False), 이미지 로딩 완료 대기를 넣기 전까지 켜지 말 것
+# 2026-07-21  Jonghyun Park w/ Claude  — v3.1 SKIP_URL_KEYWORDS 에 /registration 추가 — 메일 인증 게이트 페이지가 URL 에 /login 이 없어 로그인 skip 을 통과해 캡처물로 저장되던 문제
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -80,7 +81,10 @@ SCRIPT_TIMEOUT = 30
 # True 면 저장 직전에 current_url 을 한 번 더 확인해 걸러낸다.
 RECHECK_URL_BEFORE_SAVE = True
 # 최종 URL 에 아래 조각이 들어가면 캡처하지 않고 skip (result = login_page)
-SKIP_URL_KEYWORDS = ["/auth/", "/login", "/signin", "/sign-in"]
+# ⚠ /registration = 메일 인증 게이트. 이름만 registration 일 뿐
+#   "메일 주소를 넣으면 접근 링크를 보내준다"는 로그인 화면과 동일해 캡처 가치가 없다.
+#   (2026-07-21 확인: 해당 URL 에 /login 이 없어 위 4개 키워드를 통과해 그대로 저장됐다)
+SKIP_URL_KEYWORDS = ["/auth/", "/login", "/signin", "/sign-in", "/registration"]
 
 # ── 리다이렉트 판정 정규화 ────────────────────────────────────
 # 요청 URL 과 최종 URL 을 비교할 때 "사실상 같은 페이지"인 차이는 무시한다.

@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-14  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-21  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260720_v3.0.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260721_v3.1.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260720_v3.0.py
+python page_capture_260721_v3.1.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260720_v3.0.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260720_v3.0.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260721_v3.1.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260720_v3.0.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260721_v3.1.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
@@ -140,6 +140,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.0 | 2026-07-20 | **속도**: 워커별 Chrome 재사용(`REUSE_DRIVER`), 이어하기(`SKIP_IF_EXISTS`), 일시적 실패만 재시도(`RETRY_COUNT`), MHTML 크기 검증(`MIN_MHTML_BYTES`) |
 | v3.0 | 2026-07-20 | **리다이렉트 정규화**: 후행 슬래시만 무시하던 비교를 `#fragment`·추적 파라미터(`utm_*`/`gclid`)·`www.`·대소문자·기본 포트·`http↔https`·퍼센트 인코딩·쿼리 순서까지 무시하도록 변경 — 정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제 |
 | v3.0 | 2026-07-20 | **CDP 전체캡처(기본 OFF)**: `Page.captureScreenshot(captureBeyondViewport)` 경로 추가. 높이는 정확하지만 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나오므로 `USE_CDP_FULLPAGE=False` 가 기본. 이미지 로딩 완료 대기를 구현하기 전까지 켜지 말 것 |
+| v3.1 | 2026-07-21 | **인증 게이트 skip 보강**: `SKIP_URL_KEYWORDS` 에 `/registration` 추가 — "메일 주소를 넣으면 접근 링크를 보내준다"는 인증 게이트 페이지가 URL 에 `/login` 이 없어 v3.0 의 로그인 skip 을 통과해 캡처물로 저장되던 문제 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
