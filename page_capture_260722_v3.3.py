@@ -1,4 +1,4 @@
-# page_capture_260722_v3.2.py
+# page_capture_260722_v3.3.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -20,6 +20,11 @@
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [MO 스티칭 재작성] 겹침 보정이 CSS px 값을 device px 자리에 써서 이음새마다 내용이 중복되고 캔버스가 커진 만큼 하단이 검정으로 남던 버그를 고쳤다(실측 75,492px 페이지에서 중복·검정 약 12%). 이제 각 컷을 "실제 스크롤 위치 × 배율" 자리에 그대로 붙인다 + NEUTRALIZE_STICKY(스티칭 동안 position:fixed/sticky 를 static 으로, 저장 전 원복) + 결과 픽셀에서 스티키 바 높이를 직접 재서 잘라내는 _sticky_band + MOBILE_STITCH_OVERLAP / MOBILE_MAX_SHOTS 상수화
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [타임아웃] ① PAGE_LOAD_TIMEOUT 60 → 120 (무거운 페이지는 단독 실행에서도 90초를 넘겨 60초에 걸려 통째로 누락됐다) ② CDP_TIMEOUT 신설 — set_page_load_timeout/set_script_timeout 은 CDP 에 적용되지 않아 Page.captureSnapshot 이 무응답이면 워커가 영구 대기하고 그 future 하나 때문에 결과 CSV 기록까지 막혔다(실제 4시간 점유 사고) → cdp_with_timeout 으로 감싸고 초과 시 그 건만 mhtml_failed 로 포기
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [결과 CSV] 캡처 1건이 끝날 때마다 result_*.csv 에 append. 예전엔 전부 끝난 뒤 한 번에 써서, 중간에 멈추면 그날 판정 결과가 통째로 날아갔다. 완주하면 마지막에 입력 URL 순서로 정렬해 다시 쓴다
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [hang 원인 제거] driver.quit() 이 응답 없는 chromedriver 를 상대로 타임아웃 없는 HTTP 요청(send_remote_shutdown_command → is_connectable)을 걸어 영구 대기하던 문제 — 스택 덤프로 확인된 실제 hang 지점. 별도 스레드로 quit 하고 QUIT_TIMEOUT 초과 시 chromedriver 프로세스를 직접 종료
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [진단] 파일 로그(run_*.log)로 출력 미러링 + STACK_DUMP_INTERVAL 마다 전체 스레드 스택 덤프. 스케줄러가 pythonw 로 돌리면 콘솔 출력이 버려져 hang 원인 추적이 불가능했다 (이 로그가 위 원인을 하루 만에 특정했다)
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [신뢰성] ① 태스크 하드 데드라인(TASK_DEADLINE_MO/PC) — 감시 스레드가 상한 초과 워커의 드라이버를 끊어 전체 실행이 물리는 것을 막는다 ② 시작 시 이전 실행 잔재(headless chrome/chromedriver) 정리 — 강제 종료 시 Chrome 이 남아 메모리를 물고 있었다
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [속도] HTTP 사전 필터(PREFILTER_HTTP) — 404/5xx 는 브라우저 없이 확정. 실측상 워커시간의 58%가 죽은 URL 확인에 쓰였고 대상 URL 의 84%가 PC·MO 양쪽 死였다. 403 은 봇 차단일 수 있어 제외, soft-404 는 기존 og:url 검사가 계속 담당
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [산출물] 일일 리포트 daily_report.xlsx — 최신 날짜가 항상 B~D열(PC/MO/이슈)이고 과거 날짜는 오른쪽으로 밀린다. 같은 날 재실행은 덮어쓰기 + MO 하단 흰 여백 트림(TRIM_TRAILING_BLANK)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -45,11 +50,16 @@ import re
 import os
 import json
 import csv
+import sys
 import base64
 import threading
+import faulthandler
+import subprocess
+import atexit
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
+import requests
 
 # ════ 사용자가 바꿔야 하는 부분 (상단 설정) ════
 # 저장 경로
@@ -73,27 +83,27 @@ MAX_WORKERS = 4
 # ⚠ 목적은 "느린 페이지 거르기"가 아니라 "멈춘 서버가 워커를 무한 점유하는 것 막기" — 넉넉히 잡을 것.
 #   정상 페이지 단독 로드는 2~5초지만, MAX_WORKERS 개를 동시에 띄우면 CPU·대역폭 경합으로
 #   같은 페이지가 10초를 훌쩍 넘긴다(10초로 잡았다가 정상 site 다수가 죽는 것을 확인, 2026-07-20).
-#   2026-07-21: 60 → 120. 이미지가 많은 무거운 페이지(캡처 PNG 9MB)는 단독 실행에서도
-#   90초를 넘겨, 60초로 두면 그 페이지가 통째로 누락된다.
+#   2026-07-21: 60 → 120. US education 처럼 무거운 페이지(캡처 PNG 9MB)가 단독 실행에서도
+#   93초가 걸려 60초에 걸려 통째로 누락됐다(그날 어제 대비 1건 누락의 원인).
 PAGE_LOAD_TIMEOUT = 120
 # execute_script / execute_async_script 제한 시간(초)
 SCRIPT_TIMEOUT = 30
 # CDP(execute_cdp_cmd) 제한 시간(초).
 # ⚠ 위 두 타임아웃은 CDP 명령에 적용되지 않는다 — Page.captureSnapshot 이 무응답이면
 #   워커가 영구 대기하고, 그 future 때문에 as_completed 루프가 안 끝나 결과 CSV 도 못 쓴다.
-#   (2026-07-21: 한 건이 4시간 넘게 물려 전체 실행이 멈춘 사고)
+#   (2026-07-21: EE_PC 한 건이 4시간 넘게 물려 전체 실행이 멈춘 사고)
 CDP_TIMEOUT = 90
 
 # ── 로그인/인증 화면 캡처 제외 ────────────────────────────────
 # 리다이렉트 판정은 driver.get() 직후 1회뿐이라, 쿠키·팝업 처리 중 JS 로 "늦게" 튀는
 # 로그인 페이지(/auth/multistore 등)는 판정을 통과한 뒤 이동해 그대로 저장돼 버린다.
-# (2026-07-20 확인: 그날 저장분 90개 중 7개가 로그인 화면 — EG/SA/SA_EN/UA/VN)
+# (2026-07-20 확인: 그날 저장분 90개 중 7개가 로그인 화면)
 # True 면 저장 직전에 current_url 을 한 번 더 확인해 걸러낸다.
 RECHECK_URL_BEFORE_SAVE = True
 # 최종 URL 에 아래 조각이 들어가면 캡처하지 않고 skip (result = login_page)
-# ⚠ /registration = 메일 인증 게이트. 이름만 registration 일 뿐
-#   "메일 주소를 넣으면 접근 링크를 보내준다"는 로그인 화면과 동일해 캡처 가치가 없다.
-#   (2026-07-21 확인: 해당 URL 에 /login 이 없어 위 4개 키워드를 통과해 그대로 저장됐다)
+# ⚠ /registration = 학생포털 이메일 인증 게이트(NL/EG). 이름만 registration 일 뿐
+#   "학생 메일 주소를 넣으면 접근 링크를 보내준다"는 로그인 화면과 동일해 캡처 가치가 없다.
+#   (2026-07-21 확인: NL 은 URL 에 /login 이 없어 위 4개 키워드를 통과해 그대로 저장됐다)
 SKIP_URL_KEYWORDS = ["/auth/", "/login", "/signin", "/sign-in", "/registration"]
 
 # ── 리다이렉트 판정 정규화 ────────────────────────────────────
@@ -120,7 +130,7 @@ RETRY_COUNT = 1
 # 전체 페이지 캡처를 CDP(captureBeyondViewport)로 한다.
 # 끄면 기존 방식(PC=창 늘리기 / MO=스크롤 스티칭) 사용.
 # ⚠ 현재 False 가 정답 — CDP 는 스크롤로 띄운 레이지 로딩 이미지가 렌더되기 전에 찍혀
-#   제품 이미지가 통째로 빠진 캡처가 나온다(2026-07-20 TW/BR/HK MO 에서 확인).
+#   제품 이미지가 통째로 빠진 캡처가 나온다(2026-07-20 MO 캡처에서 확인).
 #   높이는 CDP 쪽이 정확하지만(중복 접합·하단 여백 없음) 내용이 비므로 쓸 수 없다.
 #   → 이미지 로딩 완료를 기다리는 로직을 넣기 전까지는 켜지 말 것.
 USE_CDP_FULLPAGE = False
@@ -129,17 +139,67 @@ MAX_CAPTURE_HEIGHT = 30000
 # MHTML 최소 크기(byte). 이보다 작으면 저장 실패로 보고 result=mhtml_failed 로 남긴다.
 MIN_MHTML_BYTES = 20000
 
+# ── 실행 로그 / 잔재 정리 ────────────────────────────────────
+# 작업 스케줄러는 pythonw 로 돌아 콘솔 출력이 통째로 버려진다. 그래서 hang 이 나도
+# "어디서 멈췄는지" 를 사후에 알 수 없었다(2026-07-21·22). 파일로 같이 남긴다.
+LOG_TO_FILE = True
+# 이 간격(초)마다 전체 스레드 스택을 로그에 덤프. 0 이면 끔.
+# hang 이 재발하면 이 덤프가 멈춘 지점을 그대로 보여준다. 평상시 부담은 거의 없다.
+STACK_DUMP_INTERVAL = 300
+# 시작할 때 이전 실행이 남긴 headless Chrome / chromedriver 를 정리할지.
+# ⚠ 임시 프로필(scoped_dir)·--headless 인 것만 죽인다 — 사용자가 쓰는 Chrome 은 건드리지 않는다.
+#   (PT3H 강제 종료 시 파이썬만 죽고 Chrome 100여 개가 남아 메모리를 물고 있었다)
+SWEEP_STALE_CHROME = True
+
+# ── 태스크 하드 데드라인 ─────────────────────────────────────
+# (url, device) 하나가 이 시간을 넘기면 그 워커의 chromedriver 를 강제로 끊어
+# 태스크를 timeout 으로 확정한다. 개별 명령 타임아웃(PAGE_LOAD/SCRIPT/CDP)은
+# "명령 하나"만 감시하므로, 명령 사이에서 늘어지는 경우를 못 잡는다.
+# ⚠ 실측(2026-07-22) 최대 401초(MO)/278초(PC) → 넉넉히 잡는다. 0 이면 끔.
+TASK_DEADLINE_MO = 900        # 초
+TASK_DEADLINE_PC = 600        # 초
+DEADLINE_CHECK_INTERVAL = 15  # 감시 주기(초)
+# driver.quit() 응답 대기 상한(초). 넘으면 chromedriver 프로세스를 직접 죽인다.
+# ⚠ selenium 의 quit 경로(send_remote_shutdown_command → is_connectable)는 타임아웃이 없어
+#   chromedriver 가 응답을 멈추면 영구 대기한다 — 2026-07-22 스택 덤프로 확인된 실제 hang 지점.
+QUIT_TIMEOUT = 30
+
+# ── HTTP 사전 필터 ───────────────────────────────────────────
+# 브라우저를 띄우기 전에 URL 상태코드를 먼저 확인해, 확실히 죽은 것은 Chrome 없이 확정한다.
+# (2026-07-22 실측: 워커시간의 58%가 404 확인에 쓰였고, 975개 중 822개가 PC·MO 양쪽 死)
+PREFILTER_HTTP = True
+# 이 상태코드면 캡처하지 않고 error_page 로 확정한다.
+# ⚠ 403 은 넣지 말 것 — 봇 차단일 수 있어 브라우저로는 정상 렌더되는 경우가 있다.
+PREFILTER_DEAD_STATUS = {404, 410, 500, 502, 503, 504}
+PREFILTER_WORKERS = 20        # 사전 확인 동시 요청 수
+PREFILTER_TIMEOUT = 15        # 초
+# 사전 확인용 User-Agent (모바일/데스크탑 공통 — 상태코드만 보므로 데스크탑으로 통일)
+PREFILTER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+
+# ── 일일 리포트 ──────────────────────────────────────────────
+# 날짜별 결과를 한 파일에 누적한다. 최신 날짜가 항상 왼쪽(B~D열)에 오고
+# 과거 날짜는 오른쪽으로 밀리므로, 열어서 A~D열만 보면 오늘 상태를 알 수 있다.
+DAILY_REPORT = True
+DAILY_REPORT_NAME = "daily_report.xlsx"
+# 하루당 열 개수(PC 결과 / MO 결과 / 이슈) — 구조를 바꾸려면 write_daily_report 도 같이 볼 것
+DAILY_REPORT_COLS = 3
+
 # ── 모바일 전체페이지 스티칭 ──────────────────────────────────
 # 이음새에서 겹쳐 찍을 양(CSS px). 스크롤은 (뷰포트 높이 - 이 값) 만큼 내려간다.
 MOBILE_STITCH_OVERLAP = 100
 # 스티칭 전에 position:fixed / sticky 요소를 static 으로 바꿀지.
 # 안 바꾸면 sticky 헤더·하단바가 스크롤 위치마다 다시 찍혀 이음새마다 반복 노출된다.
-# (2026-07-21 실측: 높이 75,492px 페이지에서 중복·검정이 약 12%)
+# (2026-07-21 실측: 높이 75,492px 중 중복·검정이 약 12%)
 NEUTRALIZE_STICKY = True
 # 스티칭 장수 상한 — 무한 스크롤 페이지에서 메모리 폭주를 막는다.
 # ⚠ 스티키 바가 크면 겹침이 늘어 컷 수도 함께 늘어난다(겹침 210px 기준 25,000 CSS px 페이지 ≈ 40장).
 #   상한에 걸리면 페이지 아래쪽이 조용히 잘리므로 넉넉히 두고, 걸릴 때는 경고를 남긴다.
 MOBILE_MAX_SHOTS = 120
+# 이어붙인 뒤 하단에 남는 흰 여백을 잘라낼지 (마지막 컷 뷰포트가 페이지 끝을 넘어서 생긴다)
+TRIM_TRAILING_BLANK = True
+# 트림할 때 콘텐츠 아래로 남겨둘 여백(px) — 0 으로 바짝 자르면 답답해 보인다
+TRIM_KEEP_MARGIN = 40
 # get() 후 렌더 안정화 대기 상한(초). readyState 가 complete 면 더 안 기다린다.
 PAGE_SETTLE_TIMEOUT = 8
 
@@ -171,6 +231,87 @@ https://www.example.com/nz/offer/campaign-name-gift-ideas
 https://www.example.com/vn/offer/campaign-name
 """
 # ═══════════════════════════════════════════
+
+# =========================
+# 실행 로그 / 잔재 정리
+# =========================
+class _Tee:
+    """stdout 을 화면과 파일에 동시에 쓴다. pythonw 로 돌 때는 파일에만 남는다."""
+    def __init__(self, stream, fh):
+        self.stream, self.fh = stream, fh
+        self._lock = threading.Lock()
+
+    def write(self, s):
+        with self._lock:
+            if self.stream is not None:
+                try:
+                    self.stream.write(s)
+                except Exception:
+                    pass
+            try:
+                self.fh.write(s)
+                self.fh.flush()      # hang 나도 직전까지의 로그가 남아야 한다
+            except Exception:
+                pass
+
+    def flush(self):
+        for t in (self.stream, self.fh):
+            try:
+                if t is not None:
+                    t.flush()
+            except Exception:
+                pass
+
+
+def start_file_log(ts):
+    """OUTPUT_DIR/run_{ts}.log 로 출력을 미러링하고, 필요하면 주기적 스택 덤프를 건다."""
+    if not LOG_TO_FILE:
+        return None
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    path = f"{OUTPUT_DIR}/run_{ts}.log"
+    fh = open(path, "a", encoding="utf-8")
+    sys.stdout = _Tee(getattr(sys, "__stdout__", None), fh)
+    sys.stderr = _Tee(getattr(sys, "__stderr__", None), fh)
+    atexit.register(lambda: fh.flush())
+    print(f"📝 실행 로그: {path}")
+    if STACK_DUMP_INTERVAL:
+        # 멈춘 지점을 알려주는 유일한 단서 — 파일 핸들로 직접 덤프한다
+        faulthandler.enable(file=fh)
+        faulthandler.dump_traceback_later(STACK_DUMP_INTERVAL, repeat=True, exit=False, file=fh)
+        print(f"🩺 {STACK_DUMP_INTERVAL}초마다 스레드 스택 덤프 (hang 원인 추적용)")
+    return path
+
+
+# 이전 실행 잔재만 고르는 조건 — 임시 프로필이거나 headless 인 Chrome + chromedriver 전부.
+# 사용자가 직접 쓰는 Chrome 은 자기 프로필(User Data)로 뜨므로 여기에 걸리지 않는다.
+_SWEEP_PS = (
+    "$c = Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+    "Where-Object { $_.CommandLine -match '--headless' -or $_.CommandLine -match 'Temp\\\\scoped_dir' }; "
+    "$n = ($c | Measure-Object).Count; "
+    "$c | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; "
+    "$d = Get-Process chromedriver -ErrorAction SilentlyContinue; "
+    "$m = ($d | Measure-Object).Count; "
+    "$d | Stop-Process -Force -ErrorAction SilentlyContinue; "
+    "Write-Output \"$n $m\""
+)
+
+
+def sweep_stale_chrome():
+    """이전 실행이 강제 종료되며 남긴 headless Chrome / chromedriver 를 정리한다.
+
+    ⚠ 반드시 캡처 시작 "전"에만 부른다 — 실행 중에 부르면 자기 드라이버를 죽인다.
+    """
+    if not SWEEP_STALE_CHROME or os.name != "nt":
+        return
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", _SWEEP_PS],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+        chrome_n, driver_n = (int(x) for x in out.split()[:2])
+        if chrome_n or driver_n:
+            print(f"🧹 이전 실행 잔재 정리: chrome {chrome_n}개 / chromedriver {driver_n}개")
+    except Exception as e:
+        print(f"  ⚠️ 잔재 정리 건너뜀: {type(e).__name__}: {e}")
+
 
 # =========================
 # 파일명 / 경로 관련 유틸
@@ -348,7 +489,7 @@ def wait_key_elements(driver, timeout=15):
 # =========================
 # 에러 페이지 감지
 # =========================
-# company_name 에러 페이지: <title>error | company_name Gulf</title> 등
+# 브랜드 에러 페이지: <title>error | Example Site</title> 등
 # HTTP 에러: <title>502 Bad Gateway</title> 등
 _ERROR_TITLE_KEYWORDS = ['error', '404', '502', '503', 'bad gateway', 'page not found', 'not available']
 
@@ -362,7 +503,7 @@ def is_error_page(driver) -> bool:
     except Exception:
         pass
 
-    # 2. company_name 공통 에러 페이지: canonical URL에 /common/error/ 또는 /common/404/ 포함
+    # 2. 브랜드 공통 에러 페이지: canonical URL에 /common/error/ 또는 /common/404/ 포함
     try:
         canonical = driver.execute_script(
             "var el=document.querySelector('link[rel=\"canonical\"]'); return el?el.href:'';"
@@ -424,7 +565,7 @@ def is_unknown_page(driver, url) -> bool:
     돌려주는 "알 수 없는 페이지" 감지. 정상 마케팅 페이지는 <meta property="og:url"> 이
     실제 URL 로 채워지지만, unknown 페이지는 그 값이 비어있거나(EMPTY) 태그가 아예 없다(MISSING).
     → 리다이렉트/HTTP status/기존 error 마커로는 안 잡히는(200) 케이스를 여기서 걸러 skip.
-    (기존 캡처 대조: HQ 10 + PS/SG/TH/TR/TW/UA/UZ_RU/UZ_UZ/VN/ZA 22 = 32개 정확히 감지, 정상 87 오탐 0)
+    (기존 캡처 대조: HQ 10 + 기타 site 22 = 32개 정확히 감지, 정상 87 오탐 0)
     """
     try:
         host = urlparse(url).netloc.lower()
@@ -619,6 +760,19 @@ def capture_full_page_mobile(driver, width):
             final.paste(img, (0, _top(y) + band))
         else:
             final.paste(img, (0, _top(y)))   # 겹치는 부분은 뒤 컷이 덮어씀(동일 내용)
+
+    # ── 하단 여백 트림 ────────────────────────────────────────
+    # 마지막 컷의 뷰포트가 페이지 끝을 넘어서면 그만큼 흰 띠가 남는다
+    # (2026-07-22 실측: 한 건에서 2,161px). 콘텐츠가 끝난 지점까지만 잘라낸다.
+    if TRIM_TRAILING_BLANK:
+        arr = np.asarray(final.convert("L"))
+        nonblank = np.where(arr.min(axis=1) < 245)[0]     # 흰색이 아닌 행
+        if nonblank.size:
+            end = int(nonblank[-1]) + 1 + TRIM_KEEP_MARGIN
+            if end < final.height:
+                cut = final.height - end
+                final = final.crop((0, 0, fw, min(end, final.height)))
+                print(f"  ✂️  하단 여백 {cut:,}px 잘라냄")
     return final
 
 def smooth_scroll_desktop(driver):
@@ -697,13 +851,34 @@ def get_driver(device_type):
     _tls.driver, _tls.device, _tls.vw, _tls.vh = d, device_type, vw, vh
     return d, vw, vh
 
-def _quit_driver(d):
+def _quit_driver(d, timeout=None):
+    """driver 를 닫는다. 응답이 없으면 프로세스를 직접 죽인다.
+
+    ⚠ 이게 hang 의 진짜 원인이었다 (2026-07-22 스택 덤프로 확인).
+      driver.quit() → service.stop() → send_remote_shutdown_command() → is_connectable() 은
+      urllib 로 chromedriver 에 요청을 거는데 **타임아웃이 없다**. chromedriver 가 응답을 멈추면
+      이 호출이 영구히 블록되고, 그 스레드의 태스크는 결과 행조차 남기지 못한 채 사라진다.
+      (개별 명령 타임아웃·CDP 타임아웃은 이 경로를 전혀 감시하지 못한다)
+    """
     if d is None:
         return
-    try:
-        d.quit()
-    except Exception:
-        pass
+    timeout = QUIT_TIMEOUT if timeout is None else timeout
+
+    def _q():
+        try:
+            d.quit()
+        except Exception:
+            pass
+
+    th = threading.Thread(target=_q, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        print(f"  ⚠️ driver.quit() 무응답({timeout}초) → chromedriver 프로세스 강제 종료")
+        try:
+            d.service.process.kill()          # 종료 요청을 기다리지 않고 끊는다
+        except Exception:
+            pass
     with _all_drivers_lock:
         if d in _all_drivers:
             _all_drivers.remove(d)
@@ -803,6 +978,7 @@ def capture_page(url, device_type):
     driver = None
     try:
         driver, vw, vh = get_driver(device_type)
+        _register_driver_for_deadline(driver)   # 상한 초과 시 감시 스레드가 이 driver 를 끊는다
         print(f"  📸 {device_type} 버전 캡처 중...")
         driver.get(url)
         wait_page_settled(driver)
@@ -842,7 +1018,7 @@ def capture_page(url, device_type):
             print(f"  ⛔ HTTP {status} 감지 → skip")
             return _ret("error_page", f"HTTP {status}")
 
-        # ── 에러 페이지 감지 (404 / 502 / company_name error 등) ─────
+        # ── 에러 페이지 감지 (404 / 502 / 브랜드 error 등) ─────
         if is_error_page(driver):
             print(f"  ⛔ 에러 페이지 감지 (title: '{driver.title}') → skip")
             return _ret("error_page", "is_error_page")
@@ -958,6 +1134,232 @@ def capture_page(url, device_type):
             _quit_driver(driver)
 
 # =========================
+# 일일 리포트 (최신이 항상 왼쪽)
+# =========================
+def write_daily_report(rows, run_date):
+    """날짜별 결과를 한 파일에 누적한다 — 최신 날짜가 B~D열, 과거는 오른쪽으로 밀린다.
+
+    구조:  A열 = url,  이후 하루당 3열 = [{날짜} PC, {날짜} MO, {날짜} 이슈]
+    같은 날 다시 돌리면 그 날짜 블록을 덮어쓴다(열이 중복으로 늘지 않는다).
+    URL 은 어제까지 있던 것도 계속 남긴다 — "어제는 있었는데 오늘 아예 안 돈" 것을 보이게 하려고.
+    """
+    if not DAILY_REPORT:
+        return None
+    try:
+        from openpyxl import Workbook, load_workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except Exception as e:
+        print(f"  ⚠️ 일일 리포트 건너뜀(openpyxl 없음): {e}")
+        return None
+
+    path = f"{OUTPUT_DIR}/{DAILY_REPORT_NAME}"
+    N = DAILY_REPORT_COLS
+
+    # ── 오늘 값 정리: url -> (PC결과, MO결과, 이슈)
+    today = {}
+    for r in rows:
+        u = r.get("url") or ""
+        if not u:
+            continue
+        today.setdefault(u, {})[r.get("device", "")] = r
+    day_vals = {}
+    for u, devs in today.items():
+        pc = devs.get("PC", {}).get("result", "")
+        mo = devs.get("MO", {}).get("result", "")
+        issues = []
+        for dev in ("PC", "MO"):
+            r = devs.get(dev)
+            if r and r.get("result") not in ("ok", "exists", "error_page"):
+                issues.append(f"{dev}:{r.get('result')}"
+                              + (f"({r.get('detail','')[:40]})" if r.get("detail") else ""))
+        # 한쪽만 저장된 경우는 눈에 띄게 표시 — 오늘 PT_MO 같은 케이스가 여기 걸린다
+        if pc == "ok" and mo not in ("ok", "exists"):
+            issues.append("MO 미저장")
+        if mo == "ok" and pc not in ("ok", "exists"):
+            issues.append("PC 미저장")
+        day_vals[u] = (pc, mo, " / ".join(issues))
+
+    header = run_date          # 예: "0722"
+    if os.path.exists(path):
+        wb = load_workbook(path)
+        ws = wb.active
+        # 이미 같은 날짜 블록이 있으면 그 자리에 덮어쓴다
+        existing = {ws.cell(row=1, column=c).value: c
+                    for c in range(2, ws.max_column + 1, N)}
+        if header in existing:
+            base = existing[header]
+        else:
+            ws.insert_cols(2, N)      # 최신을 항상 B~D 로 — 과거 블록은 오른쪽으로 밀린다
+            base = 2
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "daily"
+        ws.cell(row=1, column=1, value="url")
+        ws.cell(row=2, column=1, value="url")   # 2행은 소제목 행
+        base = 2
+        ws.insert_cols(2, N)
+
+    # ── 헤더 2줄: 1행 = 날짜(병합), 2행 = PC / MO / 이슈
+    ws.cell(row=1, column=1, value="url")
+    ws.cell(row=1, column=base, value=header)
+    ws.merge_cells(start_row=1, start_column=base, end_row=1, end_column=base + N - 1)
+    for off, name in enumerate(("PC", "MO", "이슈")):
+        ws.cell(row=2, column=base + off, value=name)
+
+    # ── URL 행 위치 (A열) — 없으면 아래에 추가
+    row_of = {}
+    for r in range(3, ws.max_row + 1):
+        v = ws.cell(row=r, column=1).value
+        if v:
+            row_of[v] = r
+    next_row = ws.max_row + 1 if ws.max_row >= 3 else 3
+    for u in day_vals:
+        if u not in row_of:
+            ws.cell(row=next_row, column=1, value=u)
+            row_of[u] = next_row
+            next_row += 1
+
+    # ── 값 채우기
+    fill_bad = PatternFill("solid", fgColor="FFC7CE")     # 문제 있는 칸
+    fill_ok = PatternFill("solid", fgColor="E2EFDA")      # 저장된 칸
+    for u, r in row_of.items():
+        pc, mo, issue = day_vals.get(u, ("(미실행)", "(미실행)", "오늘 대상 아님"))
+        for off, val in enumerate((pc, mo, issue)):
+            c = ws.cell(row=r, column=base + off, value=val)
+            if off < 2:
+                if val in ("ok", "exists"):
+                    c.fill = fill_ok
+                elif val not in ("error_page", ""):
+                    c.fill = fill_bad
+            elif val and val != "오늘 대상 아님":
+                c.fill = fill_bad
+
+    # ── 보기 설정
+    ws.freeze_panes = "B3"
+    ws.column_dimensions["A"].width = 72
+    for off in range(N):
+        col = get_column_letter(base + off)
+        ws.column_dimensions[col].width = 14 if off < 2 else 40
+    for cell in (ws.cell(row=1, column=1), ws.cell(row=1, column=base), ws.cell(row=2, column=1)):
+        cell.font = Font(bold=True)
+    ws.cell(row=1, column=base).alignment = Alignment(horizontal="center")
+    for off in range(N):
+        ws.cell(row=2, column=base + off).font = Font(bold=True)
+
+    wb.save(path)
+    n_issue = sum(1 for v in day_vals.values() if v[2])
+    print(f"📊 일일 리포트 갱신: {path}  (최신 {header} = B~{get_column_letter(base + N - 1)}열, "
+          f"이슈 {n_issue}건)")
+    return path
+
+
+# =========================
+# HTTP 사전 필터
+# =========================
+def prefilter_dead_urls(urls):
+    """브라우저를 띄우기 전에 상태코드만 확인해 "확실히 죽은" URL 을 걸러낸다.
+
+    돌려주는 것 = {url: status}. 여기 담긴 URL 은 Chrome 을 태우지 않고 error_page 로 확정한다.
+
+    ⚠ 판정을 넓히지 말 것 — 여기서 잘못 걸러내면 정상 페이지가 조용히 아카이브에서 빠진다.
+      · 404/410/5xx 만 죽음으로 본다 (PREFILTER_DEAD_STATUS)
+      · 403 은 봇 차단일 수 있어 제외 — 브라우저로 확인시킨다
+      · 200 이지만 내용이 홈인 soft-404 는 여기서 못 잡는다 → 기존 og:url 검사가 계속 담당
+      · 네트워크 오류·타임아웃도 제외 — 일시적일 수 있으니 브라우저에 맡긴다
+    """
+    if not PREFILTER_HTTP or not urls:
+        return {}
+    dead, t0 = {}, time.time()
+    sess_headers = {"User-Agent": PREFILTER_UA, "Accept-Language": "en-US,en;q=0.9"}
+
+    def _probe(u):
+        try:
+            # HEAD 를 안 받는 서버가 많아 GET + stream(본문 안 받음)으로 상태만 본다
+            with requests.get(u, headers=sess_headers, timeout=PREFILTER_TIMEOUT,
+                              allow_redirects=True, stream=True) as r:
+                return u, r.status_code
+        except Exception:
+            return u, None          # 판단 보류 → 브라우저로 넘긴다
+
+    print(f"🔎 HTTP 사전 확인 {len(urls)}개 (동시 {PREFILTER_WORKERS}) …")
+    with ThreadPoolExecutor(max_workers=PREFILTER_WORKERS) as ex:
+        for u, st in ex.map(_probe, urls):
+            if st in PREFILTER_DEAD_STATUS:
+                dead[u] = st
+    print(f"   → 죽은 URL {len(dead)}개 확정 / 캡처 대상 {len(urls) - len(dead)}개 "
+          f"({time.time() - t0:.0f}초)")
+    return dead
+
+
+# =========================
+# 태스크 하드 데드라인 감시
+# =========================
+# 워커 스레드가 지금 무슨 작업을 언제 시작했는지 기록해두고, 감시 스레드가 초과분을 끊는다.
+_inflight = {}                     # thread_ident -> {"url","device","t0","driver"}
+_inflight_lock = threading.Lock()
+
+
+def _mark_task_start(url, device):
+    with _inflight_lock:
+        _inflight[threading.get_ident()] = {"url": url, "device": device, "t0": time.time()}
+
+
+def _mark_task_end():
+    with _inflight_lock:
+        _inflight.pop(threading.get_ident(), None)
+
+
+def _register_driver_for_deadline(driver):
+    """이 스레드가 지금 쓰는 driver 를 감시 대상에 붙인다(끊을 때 필요)."""
+    with _inflight_lock:
+        cur = _inflight.get(threading.get_ident())
+        if cur is not None:
+            cur["driver"] = driver
+
+
+def start_deadline_watchdog(stop_event):
+    """상한을 넘긴 태스크의 chromedriver 를 강제로 끊는 감시 스레드를 띄운다.
+
+    driver 프로세스를 죽이면 그 워커의 Selenium 호출이 예외로 풀려나오므로,
+    capture_page 의 except 가 받아 timeout/error 로 확정하고 다음 작업으로 넘어간다.
+    (개별 명령 타임아웃으로는 "명령과 명령 사이"에서 늘어지는 hang 을 못 잡는다)
+    """
+    if not (TASK_DEADLINE_MO or TASK_DEADLINE_PC):
+        return None
+
+    def _loop():
+        while not stop_event.wait(DEADLINE_CHECK_INTERVAL):
+            now = time.time()
+            with _inflight_lock:
+                snapshot = list(_inflight.items())
+            for ident, info in snapshot:
+                limit = TASK_DEADLINE_MO if info["device"] == "MO" else TASK_DEADLINE_PC
+                if not limit:
+                    continue
+                el = now - info["t0"]
+                if el <= limit or info.get("killed"):
+                    continue
+                d = info.get("driver")
+                print(f"  ⏰ 데드라인 초과 {el:.0f}초 > {limit}초 → 드라이버 강제 종료: "
+                      f"{info['device']} {info['url']}")
+                info["killed"] = True
+                try:
+                    # quit() 은 응답을 기다리므로 물린 상태에선 같이 멈춘다 → 프로세스를 직접 죽인다
+                    d.service.process.kill()
+                except Exception:
+                    try:
+                        d.quit()
+                    except Exception:
+                        pass
+
+    th = threading.Thread(target=_loop, daemon=True, name="deadline-watchdog")
+    th.start()
+    return th
+
+
+# =========================
 # 여러 URL 병렬 캡처
 # =========================
 def capture_urls(urls, max_workers=MAX_WORKERS):
@@ -965,15 +1367,29 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     #   (예전엔 모든 캡처가 끝난 뒤에 만들어서, 폴더가 없으면 PNG/MHTML 저장이 전량 실패했다)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    # 로그 파일을 가장 먼저 연다 — 이후의 모든 출력(사전 확인·잔재 정리 포함)이 파일에 남는다
+    ts = datetime.now().strftime("%m%d_%H%M")
+    start_file_log(ts)
+
     if isinstance(urls,str):
         # strip 을 먼저 하고 '#' 판정 — 안 그러면 "  # 주석" 처럼 들여쓴 주석줄이 URL 로 들어간다
         _lines = [u.strip() for u in urls.split('\n')]
         urls = [u for u in _lines if u and not u.startswith('#')]
+
+    # 이전 실행이 강제 종료되며 남긴 Chrome 을 먼저 치운다 (캡처 시작 전에만 안전)
+    sweep_stale_chrome()
+
+    # ── HTTP 사전 필터 ────────────────────────────────────────
+    # 확실히 죽은 URL 은 Chrome 을 태우지 않고 여기서 확정한다(워커시간의 절반 이상이 이 부류였다).
+    dead = prefilter_dead_urls(urls)
+    live = [u for u in urls if u not in dead]
+
     # (url, device) 단위 태스크 — PC/MO 는 서로 독립이라 각각 별도 브라우저로 병렬 처리
     # ⚠ device 로 묶어서 넣는다: driver 재사용 시 한 스레드가 같은 device 를 연속 처리해야
     #   device 가 바뀔 때마다 Chrome 을 새로 띄우는 일이 없다.
-    tasks = [(u, dev) for dev in ("PC", "MO") for u in urls]
-    print(f"\n🚀 총 {len(urls)}개 페이지 × (PC/MO) = {len(tasks)}개 작업 병렬 캡처 시작 (동시 {max_workers}개)\n")
+    tasks = [(u, dev) for dev in ("PC", "MO") for u in live]
+    print(f"\n🚀 총 {len(urls)}개 페이지 중 캡처 대상 {len(live)}개 × (PC/MO) = {len(tasks)}개 작업 "
+          f"병렬 캡처 시작 (동시 {max_workers}개)\n")
 
     results = {}            # url -> {device: result 문자열}
     rows = []               # result_*.csv 용 (url, device) 단위 상세 행
@@ -983,8 +1399,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     # ── 결과 CSV 를 캡처 1건마다 append ────────────────────────
     # 예전엔 모든 작업이 끝난 뒤 한 번에 썼다. 그래서 워커 하나가 물려 루프가 안 끝나면
     # 그날 판정 결과가 통째로 메모리에 갇힌 채 날아갔다(2026-07-21 사고).
-    # 이제 진행 중에도 파일이 남아 중단돼도 어디까지 뭘 했는지 알 수 있다.
-    ts = datetime.now().strftime("%m%d_%H%M")
+    # 이제 진행 중에도 파일이 남아 중단돼도 어디까지 뭘 했는지 알 수 있다. (ts 는 위에서 만들었다)
     csv_path = f"{OUTPUT_DIR}/result_{ts}.csv"
     _cols = ["url", "device", "sitecode", "result", "final_url", "http_status", "title", "detail", "elapsed"]
     csv_lock = threading.Lock()
@@ -996,25 +1411,44 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             with open(csv_path, "a", encoding="utf-8-sig", newline="") as cf:
                 csv.DictWriter(cf, fieldnames=_cols, extrasaction="ignore").writerow(info)
 
+    # 사전 필터로 확정된 죽은 URL 도 같은 CSV 에 남긴다 — 캡처를 안 했을 뿐 판정은 난 것이다.
+    for u, st in dead.items():
+        for dev in ("PC", "MO"):
+            row = {"url": u, "device": dev, "sitecode": get_site_type(u), "result": "error_page",
+                   "final_url": u, "http_status": st, "title": "",
+                   "detail": f"HTTP {st} (사전 확인, 브라우저 미사용)", "elapsed": 0.0}
+            rows.append(row)
+            results.setdefault(u, {})[dev] = "error_page"
+            _append_row(row)
+
     # 일시적 실패(네트워크/타임아웃/세션 끊김)만 재시도. 404·리다이렉트 등 "판정 결과"는 재시도해도 같다.
     RETRYABLE = {"timeout", "error", "mhtml_failed"}
 
     def _run(task):
         u, dev = task
-        info = capture_page(u, dev)
-        for attempt in range(1, RETRY_COUNT + 1):
-            if info["result"] not in RETRYABLE:
-                break
-            print(f"  🔁 재시도 {attempt}/{RETRY_COUNT} ({info['result']}): {dev} {u}")
-            drop_thread_driver()          # 깨진 세션을 물고 재시도하지 않도록
+        _mark_task_start(u, dev)          # 데드라인 감시 대상에 등록
+        try:
             info = capture_page(u, dev)
-            info["detail"] = (info["detail"] + f" | retry {attempt}").strip(" |")
+            for attempt in range(1, RETRY_COUNT + 1):
+                if info["result"] not in RETRYABLE:
+                    break
+                print(f"  🔁 재시도 {attempt}/{RETRY_COUNT} ({info['result']}): {dev} {u}")
+                drop_thread_driver()      # 깨진 세션을 물고 재시도하지 않도록
+                _mark_task_start(u, dev)  # 재시도는 시간을 새로 잰다
+                info = capture_page(u, dev)
+                info["detail"] = (info["detail"] + f" | retry {attempt}").strip(" |")
+        finally:
+            _mark_task_end()
         _append_row(info)                 # 끝날 때까지 기다리지 않고 즉시 디스크에 남긴다
         with lock:
             progress["n"] += 1
             # 스레드 로그가 섞이므로 완료 라인만 lock 으로 묶어 깔끔히 출력
             print(f"  ✔ [{progress['n']}/{len(tasks)}] {dev} {u} → {info['result']}")
         return info
+
+    # 상한을 넘긴 태스크를 끊어 워커가 영구히 잡히는 것을 막는다
+    _stop_watchdog = threading.Event()
+    start_deadline_watchdog(_stop_watchdog)
 
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -1032,6 +1466,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
                 rows.append(info)
                 results.setdefault(info["url"], {})[info["device"]] = info["result"]
     finally:
+        _stop_watchdog.set()
         # 재사용하던 Chrome 을 모두 닫는다 (중단·예외로 빠져나가도 좀비가 안 남게)
         quit_all_drivers()
 
@@ -1093,6 +1528,9 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
         with open(unk_path, "w", encoding="utf-8") as f:
             f.write("\n".join(unknown_page_urls) + "\n")
         print(f"⛔ unknown 페이지 skip {len(unknown_page_urls)}개 → {unk_path}")
+
+    # ── 일일 리포트 (최신 날짜가 항상 B~D열) ──────────────────
+    write_daily_report(rows, ts.split("_")[0])
 
     print("✨ 모든 캡처 완료!")
 

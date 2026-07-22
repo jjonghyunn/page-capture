@@ -1,3 +1,5 @@
 selenium
 Pillow
 numpy
+requests
+openpyxl
