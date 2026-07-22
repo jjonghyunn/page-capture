@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-21  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-22  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260721_v3.1.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260722_v3.2.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260721_v3.1.py
+python page_capture_260722_v3.2.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260721_v3.1.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260721_v3.1.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260722_v3.2.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260721_v3.1.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260722_v3.2.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
@@ -141,6 +141,10 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.0 | 2026-07-20 | **리다이렉트 정규화**: 후행 슬래시만 무시하던 비교를 `#fragment`·추적 파라미터(`utm_*`/`gclid`)·`www.`·대소문자·기본 포트·`http↔https`·퍼센트 인코딩·쿼리 순서까지 무시하도록 변경 — 정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제 |
 | v3.0 | 2026-07-20 | **CDP 전체캡처(기본 OFF)**: `Page.captureScreenshot(captureBeyondViewport)` 경로 추가. 높이는 정확하지만 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나오므로 `USE_CDP_FULLPAGE=False` 가 기본. 이미지 로딩 완료 대기를 구현하기 전까지 켜지 말 것 |
 | v3.1 | 2026-07-21 | **인증 게이트 skip 보강**: `SKIP_URL_KEYWORDS` 에 `/registration` 추가 — "메일 주소를 넣으면 접근 링크를 보내준다"는 인증 게이트 페이지가 URL 에 `/login` 이 없어 v3.0 의 로그인 skip 을 통과해 캡처물로 저장되던 문제 |
+| v3.2 | 2026-07-22 | **MO 스티칭 재작성**: 겹침 보정이 CSS px 값을 device px 자리에 써서 이음새마다 내용이 중복되고, 캔버스가 커진 만큼 하단이 검정으로 남던 버그 수정(실측 75,492px 페이지에서 중복·검정 약 12%). 이제 각 컷을 "실제 스크롤 위치 × 배율" 자리에 붙여 단위 혼동 자체가 생기지 않음 |
+| v3.2 | 2026-07-22 | **스티키 반복 제거**: `NEUTRALIZE_STICKY` 로 스티칭 동안 `position:fixed/sticky` 를 `static` 으로 바꾸고 저장 전 전량 원복(MHTML 은 원본 상태 보존). JS 가 스크롤마다 위치를 다시 잡는 사이트를 위해 결과 픽셀에서 스티키 바 높이를 직접 재는 `_sticky_band` 추가 + `MOBILE_STITCH_OVERLAP` / `MOBILE_MAX_SHOTS`(상한 도달 시 잘린 높이 경고) 상수화 |
+| v3.2 | 2026-07-22 | **타임아웃**: `PAGE_LOAD_TIMEOUT` 60 → 120 (무거운 페이지는 단독 실행에서도 90초를 넘겨 통째로 누락됐음) + `CDP_TIMEOUT` 신설 — `set_page_load_timeout`/`set_script_timeout` 은 CDP 에 적용되지 않아 `Page.captureSnapshot` 무응답 시 워커가 영구 대기하고 결과 CSV 기록까지 막혔다(실제 4시간 점유) → `cdp_with_timeout` 으로 감싸고 초과 시 그 건만 `mhtml_failed` 로 포기 |
+| v3.2 | 2026-07-22 | **결과 CSV 증분 기록**: 캡처 1건이 끝날 때마다 `result_{ts}.csv` 에 append (예전엔 전부 끝난 뒤 한 번에 써서 중간에 멈추면 그날 판정 결과가 통째로 유실). 완주하면 마지막에 입력 URL 순서로 정렬해 다시 씀 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 

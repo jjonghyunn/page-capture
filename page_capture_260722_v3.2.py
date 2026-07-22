@@ -1,4 +1,4 @@
-# page_capture_260721_v3.1.py
+# page_capture_260722_v3.2.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -17,6 +17,9 @@
 # 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [리다이렉트 정규화] 후행 슬래시만 무시하던 비교를 #fragment·추적파라미터(utm_*/gclid)·www·대소문자·기본포트·http↔https·퍼센트인코딩·쿼리순서까지 무시하도록 변경 (정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제)
 # 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [CDP 전체캡처] Page.captureScreenshot(captureBeyondViewport) 경로를 추가했으나 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나옴 → 기본 OFF(USE_CDP_FULLPAGE=False), 이미지 로딩 완료 대기를 넣기 전까지 켜지 말 것
 # 2026-07-21  Jonghyun Park w/ Claude  — v3.1 SKIP_URL_KEYWORDS 에 /registration 추가 — 메일 인증 게이트 페이지가 URL 에 /login 이 없어 로그인 skip 을 통과해 캡처물로 저장되던 문제
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [MO 스티칭 재작성] 겹침 보정이 CSS px 값을 device px 자리에 써서 이음새마다 내용이 중복되고 캔버스가 커진 만큼 하단이 검정으로 남던 버그를 고쳤다(실측 75,492px 페이지에서 중복·검정 약 12%). 이제 각 컷을 "실제 스크롤 위치 × 배율" 자리에 그대로 붙인다 + NEUTRALIZE_STICKY(스티칭 동안 position:fixed/sticky 를 static 으로, 저장 전 원복) + 결과 픽셀에서 스티키 바 높이를 직접 재서 잘라내는 _sticky_band + MOBILE_STITCH_OVERLAP / MOBILE_MAX_SHOTS 상수화
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [타임아웃] ① PAGE_LOAD_TIMEOUT 60 → 120 (무거운 페이지는 단독 실행에서도 90초를 넘겨 60초에 걸려 통째로 누락됐다) ② CDP_TIMEOUT 신설 — set_page_load_timeout/set_script_timeout 은 CDP 에 적용되지 않아 Page.captureSnapshot 이 무응답이면 워커가 영구 대기하고 그 future 하나 때문에 결과 CSV 기록까지 막혔다(실제 4시간 점유 사고) → cdp_with_timeout 으로 감싸고 초과 시 그 건만 mhtml_failed 로 포기
+# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [결과 CSV] 캡처 1건이 끝날 때마다 result_*.csv 에 append. 예전엔 전부 끝난 뒤 한 번에 써서, 중간에 멈추면 그날 판정 결과가 통째로 날아갔다. 완주하면 마지막에 입력 URL 순서로 정렬해 다시 쓴다
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -70,9 +73,16 @@ MAX_WORKERS = 4
 # ⚠ 목적은 "느린 페이지 거르기"가 아니라 "멈춘 서버가 워커를 무한 점유하는 것 막기" — 넉넉히 잡을 것.
 #   정상 페이지 단독 로드는 2~5초지만, MAX_WORKERS 개를 동시에 띄우면 CPU·대역폭 경합으로
 #   같은 페이지가 10초를 훌쩍 넘긴다(10초로 잡았다가 정상 site 다수가 죽는 것을 확인, 2026-07-20).
-PAGE_LOAD_TIMEOUT = 60
+#   2026-07-21: 60 → 120. 이미지가 많은 무거운 페이지(캡처 PNG 9MB)는 단독 실행에서도
+#   90초를 넘겨, 60초로 두면 그 페이지가 통째로 누락된다.
+PAGE_LOAD_TIMEOUT = 120
 # execute_script / execute_async_script 제한 시간(초)
 SCRIPT_TIMEOUT = 30
+# CDP(execute_cdp_cmd) 제한 시간(초).
+# ⚠ 위 두 타임아웃은 CDP 명령에 적용되지 않는다 — Page.captureSnapshot 이 무응답이면
+#   워커가 영구 대기하고, 그 future 때문에 as_completed 루프가 안 끝나 결과 CSV 도 못 쓴다.
+#   (2026-07-21: 한 건이 4시간 넘게 물려 전체 실행이 멈춘 사고)
+CDP_TIMEOUT = 90
 
 # ── 로그인/인증 화면 캡처 제외 ────────────────────────────────
 # 리다이렉트 판정은 driver.get() 직후 1회뿐이라, 쿠키·팝업 처리 중 JS 로 "늦게" 튀는
@@ -118,6 +128,18 @@ USE_CDP_FULLPAGE = False
 MAX_CAPTURE_HEIGHT = 30000
 # MHTML 최소 크기(byte). 이보다 작으면 저장 실패로 보고 result=mhtml_failed 로 남긴다.
 MIN_MHTML_BYTES = 20000
+
+# ── 모바일 전체페이지 스티칭 ──────────────────────────────────
+# 이음새에서 겹쳐 찍을 양(CSS px). 스크롤은 (뷰포트 높이 - 이 값) 만큼 내려간다.
+MOBILE_STITCH_OVERLAP = 100
+# 스티칭 전에 position:fixed / sticky 요소를 static 으로 바꿀지.
+# 안 바꾸면 sticky 헤더·하단바가 스크롤 위치마다 다시 찍혀 이음새마다 반복 노출된다.
+# (2026-07-21 실측: 높이 75,492px 페이지에서 중복·검정이 약 12%)
+NEUTRALIZE_STICKY = True
+# 스티칭 장수 상한 — 무한 스크롤 페이지에서 메모리 폭주를 막는다.
+# ⚠ 스티키 바가 크면 겹침이 늘어 컷 수도 함께 늘어난다(겹침 210px 기준 25,000 CSS px 페이지 ≈ 40장).
+#   상한에 걸리면 페이지 아래쪽이 조용히 잘리므로 넉넉히 두고, 걸릴 때는 경고를 남긴다.
+MOBILE_MAX_SHOTS = 120
 # get() 후 렌더 안정화 대기 상한(초). readyState 가 complete 면 더 안 기다린다.
 PAGE_SETTLE_TIMEOUT = 8
 
@@ -426,6 +448,26 @@ def is_unknown_page(driver, url) -> bool:
 # =========================
 def screenshot_png(driver): return driver.get_screenshot_as_png()
 
+def cdp_with_timeout(driver, cmd, params=None, timeout=None):
+    """CDP 명령을 별도 스레드에서 실행하고 제한 시간을 넘기면 TimeoutError 를 낸다.
+
+    ⚠ set_page_load_timeout / set_script_timeout 은 CDP 에 적용되지 않는다.
+      Page.captureSnapshot 이 무응답이면 워커가 영구 대기하고, 그 future 하나 때문에
+      as_completed 루프가 끝나지 않아 결과 CSV 기록과 드라이버 정리까지 통째로 막힌다.
+      (2026-07-21 실제 사고) 스레드는 daemon 이라 끊어도 프로세스 종료를 막지 않는다.
+    """
+    timeout = CDP_TIMEOUT if timeout is None else timeout
+    box = {}
+    def _call():
+        try: box["r"] = driver.execute_cdp_cmd(cmd, params or {})
+        except Exception as e: box["e"] = e
+    th = threading.Thread(target=_call, daemon=True)
+    th.start(); th.join(timeout)
+    if th.is_alive():
+        raise TimeoutError(f"CDP {cmd} 응답 없음 ({timeout}초 초과)")
+    if "e" in box: raise box["e"]
+    return box.get("r")
+
 def looks_blank(png_bytes):
     img = Image.open(io.BytesIO(png_bytes)).convert("L")
     arr = np.array(img)
@@ -433,29 +475,150 @@ def looks_blank(png_bytes):
     nonwhite = np.sum(arr < 250)
     return (nonwhite / arr.size) < 0.005
 
+# position:fixed / sticky 를 static 으로 바꾼다(원복용으로 바뀐 요소를 window 에 보관).
+# ⚠ 컷마다 다시 호출되므로 목록을 덮어쓰지 말고 누적해야 한다.
+#   덮어쓰면(두 번째 호출은 대개 빈 배열) 원복이 안 돼 position:static 이 주입된 채로
+#   MHTML 이 저장된다 — 아카이브 원본이 훼손되므로 반드시 누적 + 전량 원복.
+_JS_STICKY_OFF = """
+window.__pcSticky = window.__pcSticky || [];
+var n = 0;
+document.querySelectorAll('*').forEach(function (el) {
+  var p = getComputedStyle(el).position;
+  if (p === 'fixed' || p === 'sticky') {
+    window.__pcSticky.push([el, el.style.getPropertyValue('position'),
+                                el.style.getPropertyPriority('position')]);
+    el.style.setProperty('position', 'static', 'important');
+    n++;
+  }
+});
+return n;
+"""
+_JS_STICKY_ON = """
+var c = window.__pcSticky || [];
+for (var i = c.length - 1; i >= 0; i--) {          // 나중에 바꾼 것부터 되돌린다
+  var el = c[i][0], v = c[i][1], pr = c[i][2];
+  if (v) { el.style.setProperty('position', v, pr || ''); }
+  else   { el.style.removeProperty('position'); }   // 원래 인라인 스타일이 없었으면 지운다
+}
+window.__pcSticky = null;
+return c.length;
+"""
+
 def capture_full_page_mobile(driver, width):
+    """모바일 전체페이지를 스크롤하며 찍어 이어붙인다.
+
+    ⚠ 좌표 단위 주의 — 예전 버전의 버그 원인:
+      스크롤 값(scrollTo/innerHeight)은 CSS px 인데 스크린샷은 device px(=CSS × 배율 3)다.
+      옛 코드는 겹침 보정에 CSS px 값(100)을 device px 자리에 그대로 써서
+        ① 이음새마다 200 device px 씩 내용이 중복되고
+        ② 캔버스가 실제보다 100×(장수-1) px 커져 그만큼 하단이 검정으로 남았다.
+        (실측: 높이 75,492px = 2432×31+100, 하단 검정 3,000px = 100×30 으로 정확히 일치)
+      → 이제 "각 컷을 실제 스크롤 위치 × 배율" 자리에 그대로 붙인다. 겹침 보정 산술이 사라져
+        단위 혼동 자체가 생길 수 없고, 캔버스 높이도 붙인 범위에서 역산하므로 빈칸이 안 생긴다.
+    """
     driver.execute_script("window.scrollTo(0,0);")
     time.sleep(2)
-    total_height = driver.execute_script("return document.body.scrollHeight")
-    vh = driver.execute_script("return window.innerHeight")
-    screenshots = []
-    offset, overlap = 0, 100
-    while offset < total_height:
-        driver.execute_script(f"window.scrollTo(0,{offset});")
-        time.sleep(2)
-        png = driver.get_screenshot_as_png()
-        screenshots.append(Image.open(io.BytesIO(png)))
-        offset += vh - overlap
-        if offset + vh > total_height: break
-    if len(screenshots)==1: return screenshots[0]
-    fw = screenshots[0].width
-    fh = sum(i.height for i in screenshots) - overlap*(len(screenshots)-1)
-    final = Image.new('RGB', (fw, fh))
-    y = 0
-    for i,img in enumerate(screenshots):
-        if i>0: img = img.crop((0, overlap, fw, img.height))
-        final.paste(img, (0,y))
-        y += img.height - (overlap if i<len(screenshots)-1 else 0)
+
+    sticky_n = 0
+    if NEUTRALIZE_STICKY:
+        try:
+            sticky_n = driver.execute_script(_JS_STICKY_OFF) or 0
+            if sticky_n:
+                print(f"  📌 sticky/fixed {sticky_n}개 → static (이음새 반복 방지)")
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+    def _collect(overlap):
+        """겹침(CSS px)을 정해 스크롤하며 컷을 모은다. → [(이미지, 실제 스크롤위치[CSS px])]"""
+        total_height = driver.execute_script(
+            "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);")
+        vh = driver.execute_script("return window.innerHeight")
+        shots, offset = [], 0
+        while True:
+            driver.execute_script(f"window.scrollTo(0,{offset});")
+            time.sleep(2)
+            if NEUTRALIZE_STICKY:
+                # JS 로 매 스크롤마다 위치를 다시 잡는 사이트가 있어 컷마다 다시 눌러준다
+                try: driver.execute_script(_JS_STICKY_OFF)
+                except Exception: pass
+            # 요청한 offset 이 아니라 "실제로 스크롤된 위치"를 쓴다 —
+            # 페이지 끝에서는 요청보다 덜 내려가므로, 이 값이 붙일 좌표의 진실이다.
+            y = int(driver.execute_script("return Math.round(window.pageYOffset);") or 0)
+            shots.append((Image.open(io.BytesIO(driver.get_screenshot_as_png())), y))
+            if y + vh >= total_height - 1:
+                break
+            if len(shots) >= MOBILE_MAX_SHOTS:
+                # 여기서 끊으면 페이지 아래쪽이 통째로 빠진다 — 조용히 넘어가지 않는다
+                print(f"  ⚠️ 컷 {MOBILE_MAX_SHOTS}장 상한 도달 → 이 아래 "
+                      f"약 {max(total_height - (y + vh), 0):,} CSS px 는 캡처되지 않음")
+                break
+            nxt = offset + vh - overlap
+            if nxt <= offset:       # 뷰포트보다 겹침이 크면 무한루프 — 방어
+                break
+            offset = nxt
+        return shots, vh
+
+    def _sticky_band(shots):
+        """컷들의 "상단 몇 행이 서로 똑같은지" 를 재서 스티키 바 높이(device px)를 구한다.
+
+        CSS position 을 static 으로 바꿔도 JS 가 스크롤마다 위치를 다시 잡는 사이트가 있어
+        (2026-07-21 사례: 101개를 static 으로 바꿨는데도 570px 바가 32회 반복)
+        "왜 고정됐는지" 를 따지지 않고 결과 픽셀에서 직접 잰다.
+        """
+        if len(shots) < 3:
+            return 0
+        limit = shots[0][0].height // 3          # 뷰포트의 1/3 이상은 스티키로 보지 않음
+        best = 0
+        for i in range(1, len(shots) - 1):
+            a1 = np.asarray(shots[i][0].convert("RGB"))
+            a2 = np.asarray(shots[i + 1][0].convert("RGB"))
+            n = 0
+            while n < limit and np.array_equal(a1[n], a2[n]):
+                n += 1
+            best = max(best, n)                  # 바가 숨는 구간이 있으므로 최대값을 쓴다
+        return best
+
+    try:
+        overlap = MOBILE_STITCH_OVERLAP
+        shots, vh = _collect(overlap)
+        fw = shots[0][0].width
+        scale = (fw / float(width)) if width else 1.0     # device px / CSS px (보통 3.0)
+        band = _sticky_band(shots)
+
+        # ⚠ 잘라낸 밴드 자리는 "앞 컷"이 덮어줘야 빈칸이 안 생긴다.
+        #   앞 컷이 뒤 컷 시작점 너머로 뻗는 길이 = 겹침 × 배율 이므로, 겹침이 밴드보다 커야 한다.
+        #   부족하면 겹침을 늘려 한 번만 다시 찍는다.
+        if band and band > overlap * scale and len(shots) > 1:
+            need = min(int(band / scale) + 20, max(int(vh * 0.5), MOBILE_STITCH_OVERLAP))
+            if need > overlap:
+                print(f"  🔁 스티키 바 {band}px 감지 → 겹침 {overlap}→{need}px 로 재촬영")
+                overlap = need
+                shots, vh = _collect(overlap)
+                band = _sticky_band(shots)
+        if band:
+            print(f"  ✂️  스티키 바 {band}px — 첫 컷 제외하고 잘라냄 (이음새 반복 제거)")
+    finally:
+        # ⚠ 조건 없이 원복한다 — 첫 호출이 0개여도 컷마다 재적용하며 더 잡았을 수 있고,
+        #   여기서 원복해야 뒤이어 저장되는 MHTML 이 원본 그대로가 된다.
+        if NEUTRALIZE_STICKY:
+            try:
+                restored = driver.execute_script(_JS_STICKY_ON) or 0
+                if restored: print(f"  ↩️  sticky/fixed {restored}개 원복 (MHTML 은 원본 상태로 저장)")
+            except Exception: pass
+
+    if len(shots) == 1:
+        return shots[0][0]
+
+    def _top(y): return int(round(y * scale))
+    fh = max(_top(y) + img.height for img, y in shots)
+    final = Image.new('RGB', (fw, fh), (255, 255, 255))   # 빈칸이 남아도 검정이 아닌 흰색
+    for i, (img, y) in enumerate(shots):
+        if i and band:                       # 첫 컷의 상단은 진짜 페이지 머리라 남긴다
+            img = img.crop((0, band, fw, img.height))
+            final.paste(img, (0, _top(y) + band))
+        else:
+            final.paste(img, (0, _top(y)))   # 겹치는 부분은 뒤 컷이 덮어씀(동일 내용)
     return final
 
 def smooth_scroll_desktop(driver):
@@ -572,7 +735,7 @@ def capture_fullpage_cdp(driver):
         if h > MAX_CAPTURE_HEIGHT:
             print(f"  ⚠️ 페이지가 너무 김({h}px) → {MAX_CAPTURE_HEIGHT}px 로 잘라 캡처")
             h = MAX_CAPTURE_HEIGHT
-        res = driver.execute_cdp_cmd("Page.captureScreenshot", {
+        res = cdp_with_timeout(driver, "Page.captureScreenshot", {
             "format": "png",
             "captureBeyondViewport": True,
             "clip": {"x": 0, "y": 0, "width": w, "height": h, "scale": 1},
@@ -757,8 +920,14 @@ def capture_page(url, device_type):
         if device_type != "MO":
             driver.set_window_size(vw, vh)
         driver.execute_script("window.scrollTo(0,0)")
-        result = driver.execute_cdp_cmd("Page.captureSnapshot", {"format": "mhtml"})
-        mhtml_data = result.get("data", "")
+        try:
+            result = cdp_with_timeout(driver, "Page.captureSnapshot", {"format": "mhtml"})
+        except TimeoutError as e:
+            # 이 세션은 CDP 가 응답을 멈춘 상태 — 물고 다음 URL 로 가면 그 URL 까지 망친다.
+            print(f"  ⚠️ MHTML 저장 무응답 → 이 건만 포기: {e}")
+            drop_thread_driver()
+            return _ret("mhtml_failed", str(e))
+        mhtml_data = (result or {}).get("data", "")
         if not mhtml_data or len(mhtml_data) < MIN_MHTML_BYTES:
             # PNG 는 남았는데 MHTML 만 실패한 경우 — 결과와 산출물이 어긋나지 않게 따로 표시
             print(f"  ⚠️ MHTML 이 비었거나 너무 작음({len(mhtml_data)}B)")
@@ -811,6 +980,22 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     progress = {"n": 0}
     lock = threading.Lock()
 
+    # ── 결과 CSV 를 캡처 1건마다 append ────────────────────────
+    # 예전엔 모든 작업이 끝난 뒤 한 번에 썼다. 그래서 워커 하나가 물려 루프가 안 끝나면
+    # 그날 판정 결과가 통째로 메모리에 갇힌 채 날아갔다(2026-07-21 사고).
+    # 이제 진행 중에도 파일이 남아 중단돼도 어디까지 뭘 했는지 알 수 있다.
+    ts = datetime.now().strftime("%m%d_%H%M")
+    csv_path = f"{OUTPUT_DIR}/result_{ts}.csv"
+    _cols = ["url", "device", "sitecode", "result", "final_url", "http_status", "title", "detail", "elapsed"]
+    csv_lock = threading.Lock()
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as cf:
+        csv.DictWriter(cf, fieldnames=_cols, extrasaction="ignore").writeheader()
+
+    def _append_row(info):
+        with csv_lock:
+            with open(csv_path, "a", encoding="utf-8-sig", newline="") as cf:
+                csv.DictWriter(cf, fieldnames=_cols, extrasaction="ignore").writerow(info)
+
     # 일시적 실패(네트워크/타임아웃/세션 끊김)만 재시도. 404·리다이렉트 등 "판정 결과"는 재시도해도 같다.
     RETRYABLE = {"timeout", "error", "mhtml_failed"}
 
@@ -824,6 +1009,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             drop_thread_driver()          # 깨진 세션을 물고 재시도하지 않도록
             info = capture_page(u, dev)
             info["detail"] = (info["detail"] + f" | retry {attempt}").strip(" |")
+        _append_row(info)                 # 끝날 때까지 기다리지 않고 즉시 디스크에 남긴다
         with lock:
             progress["n"] += 1
             # 스레드 로그가 섞이므로 완료 라인만 lock 으로 묶어 깔끔히 출력
@@ -865,13 +1051,11 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
         elif "unknown_page" in vals:
             unknown_page_urls.append(u)
 
-    ts = datetime.now().strftime("%m%d_%H%M")
-
     # ── (url, device) 단위 상세 결과 CSV ──────────────────────
     # txt 3종은 URL 단위라 "PC 는 정상인데 MO 만 리다이렉트" 같은 경우를 구분 못 하고,
     # error/timeout 은 아예 어느 txt 에도 안 남아 재실행 대상 파악이 불가능했다.
-    csv_path = f"{OUTPUT_DIR}/result_{ts}.csv"
-    _cols = ["url", "device", "sitecode", "result", "final_url", "http_status", "title", "detail", "elapsed"]
+    # ⚠ ts / csv_path / _cols 는 캡처 시작 전에 이미 만들어 건별로 append 해 왔다.
+    #   여기서는 같은 파일을 "입력 URL 순서"로 정렬해 다시 쓴다(완주했을 때만 정렬본이 남음).
     _order = {u: i for i, u in enumerate(urls)}
     rows.sort(key=lambda r: (_order.get(r.get("url", ""), 10**9), r.get("device", "")))
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as cf:
