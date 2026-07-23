@@ -1,4 +1,4 @@
-# page_capture_260722_v3.3.py
+# page_capture_260723_v3.4.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -25,6 +25,10 @@
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [신뢰성] ① 태스크 하드 데드라인(TASK_DEADLINE_MO/PC) — 감시 스레드가 상한 초과 워커의 드라이버를 끊어 전체 실행이 물리는 것을 막는다 ② 시작 시 이전 실행 잔재(headless chrome/chromedriver) 정리 — 강제 종료 시 Chrome 이 남아 메모리를 물고 있었다
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [속도] HTTP 사전 필터(PREFILTER_HTTP) — 404/5xx 는 브라우저 없이 확정. 실측상 워커시간의 58%가 죽은 URL 확인에 쓰였고 대상 URL 의 84%가 PC·MO 양쪽 死였다. 403 은 봇 차단일 수 있어 제외, soft-404 는 기존 og:url 검사가 계속 담당
 # 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [산출물] 일일 리포트 daily_report.xlsx — 최신 날짜가 항상 B~D열(PC/MO/이슈)이고 과거 날짜는 오른쪽으로 밀린다. 같은 날 재실행은 덮어쓰기 + MO 하단 흰 여백 트림(TRIM_TRAILING_BLANK)
+# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [크래시] STACK_DUMP_INTERVAL 기본 OFF. 이 기능을 켠 뒤 access violation(0xC0000005) 이 2회 발생했고 둘 다 "덤프 출력 도중"이었다. 하드 크래시는 finally 도 안 돌아, 전체 태스크의 절반쯤에서 죽으면 큐 뒤쪽이 통째로 결번되고 산출물(리포트·skip txt)도 하나도 안 남는다 — 실제로 하루치 캡처의 27%가 그렇게 빠졌다
+# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [산출물] 날짜별 result CSV·run 로그 누적을 폐지하고 고정명·언더바 접두로 통일 — _daily_report.xlsx / _result_latest.csv / _run_latest.log / _skipped_*.txt (RESULT_CSV_NAME·RUN_LOG_NAME·SKIPPED_TXT_NAMES). 이력은 일일 리포트 한 파일이 갖고, 폴더 맨 위에 모여 보인다
+# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [리포트 내구성] write_daily_report 가 메모리 rows 대신 result CSV 를 읽도록 바꾸고 REPORT_FLUSH_EVERY(기본 50) 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다
+# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [이어하기] already_captured() 신설 — SKIP_IF_EXISTS 가 OUTPUT_DIR 루트만 보던 탓에, 캡처물을 sitecode 폴더로 옮기는 foldering 을 돌린 뒤에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 {OUTPUT_DIR}/{SITECODE}/ 도 함께 확인한다
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -150,9 +154,15 @@ MIN_MHTML_BYTES = 20000
 # 작업 스케줄러는 pythonw 로 돌아 콘솔 출력이 통째로 버려진다. 그래서 hang 이 나도
 # "어디서 멈췄는지" 를 사후에 알 수 없었다(2026-07-21·22). 파일로 같이 남긴다.
 LOG_TO_FILE = True
+# 실행 로그 파일명 — 날짜별로 쌓지 않고 매 실행 덮어쓴다(언더바 접두 = 폴더 맨 위 정렬).
+RUN_LOG_NAME = "_run_latest.log"
 # 이 간격(초)마다 전체 스레드 스택을 로그에 덤프. 0 이면 끔.
-# hang 이 재발하면 이 덤프가 멈춘 지점을 그대로 보여준다. 평상시 부담은 거의 없다.
-STACK_DUMP_INTERVAL = 300
+# ⚠ 2026-07-23: 기본 OFF. 이 기능을 켠 뒤 관측된 access violation(0xC0000005) 2건이
+#   모두 "덤프 출력 도중" 발생했다(전체 태스크의 절반쯤에서 프로세스가 통째로 사망 → 그날
+#   캡처가 큐 뒤쪽부터 통째로 결번). 프로세스가 죽으면 finally 도 안 돌아 뒷정리·산출물이
+#   전부 날아간다. hang 추적은 run 로그 + 데드라인 감시로 충분하다.
+#   (hang 을 다시 파야 할 때만 일시적으로 켤 것)
+STACK_DUMP_INTERVAL = 0
 # 시작할 때 이전 실행이 남긴 headless Chrome / chromedriver 를 정리할지.
 # ⚠ 임시 프로필(scoped_dir)·--headless 인 것만 죽인다 — 사용자가 쓰는 Chrome 은 건드리지 않는다.
 #   (PT3H 강제 종료 시 파이썬만 죽고 Chrome 100여 개가 남아 메모리를 물고 있었다)
@@ -187,10 +197,25 @@ PREFILTER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # ── 일일 리포트 ──────────────────────────────────────────────
 # 날짜별 결과를 한 파일에 누적한다. 최신 날짜가 항상 왼쪽(B~D열)에 오고
 # 과거 날짜는 오른쪽으로 밀리므로, 열어서 A~D열만 보면 오늘 상태를 알 수 있다.
+# ⚠ 날짜별 result CSV 를 쌓는 대신 이 리포트 하나로 이력을 본다(2026-07-23 전환).
 DAILY_REPORT = True
-DAILY_REPORT_NAME = "daily_report.xlsx"
+DAILY_REPORT_NAME = "_daily_report.xlsx"
 # 하루당 열 개수(PC 결과 / MO 결과 / 이슈) — 구조를 바꾸려면 write_daily_report 도 같이 볼 것
 DAILY_REPORT_COLS = 3
+# 결과 CSV 파일명 — 실행 중 건별로 append 되는 안전망. 날짜별로 쌓지 않고 매 실행 덮어쓴다.
+# (이력은 일일 리포트가 갖는다)
+RESULT_CSV_NAME = "_result_latest.csv"
+# skip 사유별 txt 파일명 — 역시 고정명(누적 X). 같은 정보가 리포트 '이슈' 열에도 남는다.
+SKIPPED_TXT_NAMES = {
+    "redirect":     "_skipped_redirect.txt",
+    "error_page":   "_skipped_error_page.txt",
+    "login_page":   "_skipped_login_page.txt",
+    "unknown_page": "_skipped_unknown_page.txt",
+}
+# 캡처 N건마다 리포트를 중간 저장한다(0 이면 완주 시에만).
+# ⚠ access violation 같은 하드 크래시는 finally·atexit 도 실행되지 않는다 — 프로세스가 죽어도
+#   그 시점까지의 결과가 리포트에 남으려면 실행 중에 디스크로 내려두는 수밖에 없다(2026-07-23).
+REPORT_FLUSH_EVERY = 50
 
 # ── 모바일 전체페이지 스티칭 ──────────────────────────────────
 # 이음새에서 겹쳐 찍을 양(CSS px). 스크롤은 (뷰포트 높이 - 이 값) 만큼 내려간다.
@@ -271,12 +296,15 @@ class _Tee:
 
 
 def start_file_log(ts):
-    """OUTPUT_DIR/run_{ts}.log 로 출력을 미러링하고, 필요하면 주기적 스택 덤프를 건다."""
+    """OUTPUT_DIR/{RUN_LOG_NAME} 로 출력을 미러링하고, 필요하면 주기적 스택 덤프를 건다.
+
+    로그는 실행마다 새로 쓴다("w") — 날짜별로 쌓지 않는 대신 이력은 일일 리포트가 갖는다.
+    """
     if not LOG_TO_FILE:
         return None
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    path = f"{OUTPUT_DIR}/run_{ts}.log"
-    fh = open(path, "a", encoding="utf-8")
+    path = f"{OUTPUT_DIR}/{RUN_LOG_NAME}"
+    fh = open(path, "w", encoding="utf-8")
     sys.stdout = _Tee(getattr(sys, "__stdout__", None), fh)
     sys.stderr = _Tee(getattr(sys, "__stderr__", None), fh)
     atexit.register(lambda: fh.flush())
@@ -943,6 +971,26 @@ def build_output_paths(url, device_type, timestamp):
     png = f"{OUTPUT_DIR}/{base}"
     return png, png[:-4] + ".mhtml"
 
+
+def already_captured(png_path, mhtml_path):
+    """이 (url, device) 를 오늘 이미 찍었는지 — OUTPUT_DIR 루트 + sitecode 폴더 양쪽을 본다.
+
+    ⚠ 루트만 보면 안 된다: 캡처 후 foldering_move_png.py 로 파일을 {OUTPUT_DIR}/{SITECODE}/
+      아래로 옮기고 나면 루트가 비어, 재실행이 이미 찍은 것까지 전부 다시 찍는다
+      (2026-07-23: 결번 몇 건만 보충하려던 재실행이 전량 재캡처가 될 뻔했다).
+      폴더명 규칙은 foldering 스크립트와 동일 — 파일명에서 _PC / _MO 앞부분, 공백은 언더바.
+    """
+    if os.path.exists(png_path) and os.path.exists(mhtml_path):
+        return True
+    base = os.path.basename(png_path)
+    m = re.match(r"(.+?)[ _](PC|MO)", base)
+    if not m:
+        return False
+    sub = os.path.join(OUTPUT_DIR, m.group(1).replace(" ", "_"))
+    return (os.path.exists(os.path.join(sub, base))
+            and os.path.exists(os.path.join(sub, os.path.basename(mhtml_path))))
+
+
 def wait_page_settled(driver, timeout=None):
     """readyState 가 complete 될 때까지만 기다린다 (고정 sleep 대체)."""
     timeout = PAGE_SETTLE_TIMEOUT if timeout is None else timeout
@@ -976,7 +1024,7 @@ def capture_page(url, device_type):
 
     # ── 이어하기(resume) — 이미 받은 건 브라우저를 띄우지도 않는다 ──
     png_path, mhtml_path = build_output_paths(url, device_type, timestamp)
-    if SKIP_IF_EXISTS and os.path.exists(png_path) and os.path.exists(mhtml_path):
+    if SKIP_IF_EXISTS and already_captured(png_path, mhtml_path):
         print(f"  ⏩ 이미 있음 → skip: {os.path.basename(png_path)}")
         return _ret("exists", "PNG/MHTML 이미 존재")
 
@@ -1143,12 +1191,17 @@ def capture_page(url, device_type):
 # =========================
 # 일일 리포트 (최신이 항상 왼쪽)
 # =========================
-def write_daily_report(rows, run_date):
+def write_daily_report(csv_path, run_date, quiet=False):
     """날짜별 결과를 한 파일에 누적한다 — 최신 날짜가 B~D열, 과거는 오른쪽으로 밀린다.
 
     구조:  A열 = url,  이후 하루당 3열 = [{날짜} PC, {날짜} MO, {날짜} 이슈]
     같은 날 다시 돌리면 그 날짜 블록을 덮어쓴다(열이 중복으로 늘지 않는다).
     URL 은 어제까지 있던 것도 계속 남긴다 — "어제는 있었는데 오늘 아예 안 돈" 것을 보이게 하려고.
+
+    ⚠ 입력이 메모리의 rows 가 아니라 **디스크의 result CSV** 인 것이 핵심이다(2026-07-23).
+      하드 크래시로 프로세스가 죽으면 finally·atexit 이 안 돌아 메모리의 결과는 통째로 사라진다.
+      캡처 건별로 append 되는 CSV 를 원본으로 삼아야 중간에 죽어도 그 시점까지가 리포트에 남는다.
+      실행 중에도 REPORT_FLUSH_EVERY 건마다 부른다.
     """
     if not DAILY_REPORT:
         return None
@@ -1164,6 +1217,13 @@ def write_daily_report(rows, run_date):
     N = DAILY_REPORT_COLS
 
     # ── 오늘 값 정리: url -> (PC결과, MO결과, 이슈)
+    # CSV 는 append 방식이라 같은 (url, device) 가 두 번 있을 수 있다(재시도 등) → 뒤엣것이 최종.
+    try:
+        with open(csv_path, encoding="utf-8-sig", newline="") as cf:
+            rows = list(csv.DictReader(cf))
+    except FileNotFoundError:
+        print(f"  ⚠️ 일일 리포트 건너뜀(결과 CSV 없음): {csv_path}")
+        return None
     today = {}
     for r in rows:
         u = r.get("url") or ""
@@ -1256,9 +1316,10 @@ def write_daily_report(rows, run_date):
         ws.cell(row=2, column=base + off).font = Font(bold=True)
 
     wb.save(path)
-    n_issue = sum(1 for v in day_vals.values() if v[2])
-    print(f"📊 일일 리포트 갱신: {path}  (최신 {header} = B~{get_column_letter(base + N - 1)}열, "
-          f"이슈 {n_issue}건)")
+    if not quiet:
+        n_issue = sum(1 for v in day_vals.values() if v[2])
+        print(f"📊 일일 리포트 갱신: {path}  (최신 {header} = B~{get_column_letter(base + N - 1)}열, "
+              f"이슈 {n_issue}건)")
     return path
 
 
@@ -1407,7 +1468,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     # 예전엔 모든 작업이 끝난 뒤 한 번에 썼다. 그래서 워커 하나가 물려 루프가 안 끝나면
     # 그날 판정 결과가 통째로 메모리에 갇힌 채 날아갔다(2026-07-21 사고).
     # 이제 진행 중에도 파일이 남아 중단돼도 어디까지 뭘 했는지 알 수 있다. (ts 는 위에서 만들었다)
-    csv_path = f"{OUTPUT_DIR}/result_{ts}.csv"
+    csv_path = f"{OUTPUT_DIR}/{RESULT_CSV_NAME}"
     _cols = ["url", "device", "sitecode", "result", "final_url", "http_status", "title", "detail", "elapsed"]
     csv_lock = threading.Lock()
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as cf:
@@ -1451,6 +1512,12 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             progress["n"] += 1
             # 스레드 로그가 섞이므로 완료 라인만 lock 으로 묶어 깔끔히 출력
             print(f"  ✔ [{progress['n']}/{len(tasks)}] {dev} {u} → {info['result']}")
+            # 중간 저장 — 프로세스가 죽어도 여기까지는 리포트에 남는다 (조용히)
+            if REPORT_FLUSH_EVERY and progress["n"] % REPORT_FLUSH_EVERY == 0:
+                try:
+                    write_daily_report(csv_path, ts.split("_")[0], quiet=True)
+                except Exception as e:
+                    print(f"  ⚠️ 리포트 중간 저장 실패(계속 진행): {e}")
         return info
 
     # 상한을 넘긴 태스크를 끊어 워커가 영구히 잡히는 것을 막는다
@@ -1510,34 +1577,34 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
 
     # ── skip된 URL을 txt 파일로 저장 ──────────────────────────
     if skipped_urls:
-        skip_path = f"{OUTPUT_DIR}/skipped_redirect_{ts}.txt"
+        skip_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['redirect']}"
         with open(skip_path, "w", encoding="utf-8") as f:
             f.write("\n".join(skipped_urls) + "\n")
         print(f"⏭️  리다이렉트 skip {len(skipped_urls)}개 → {skip_path}")
 
     # ── 에러 페이지 URL을 txt 파일로 저장 ─────────────────────
     if error_page_urls:
-        err_path = f"{OUTPUT_DIR}/skipped_error_page_{ts}.txt"
+        err_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['error_page']}"
         with open(err_path, "w", encoding="utf-8") as f:
             f.write("\n".join(error_page_urls) + "\n")
         print(f"⛔ 에러 페이지 skip {len(error_page_urls)}개 → {err_path}")
 
     # ── 로그인/인증 화면 URL을 txt 파일로 저장 ────────────────
     if login_page_urls:
-        login_path = f"{OUTPUT_DIR}/skipped_login_page_{ts}.txt"
+        login_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['login_page']}"
         with open(login_path, "w", encoding="utf-8") as f:
             f.write("\n".join(login_page_urls) + "\n")
         print(f"🔒 로그인 화면 skip {len(login_page_urls)}개 → {login_path}")
 
     # ── unknown(soft-404) 페이지 URL을 txt 파일로 저장 ────────
     if unknown_page_urls:
-        unk_path = f"{OUTPUT_DIR}/skipped_unknown_page_{ts}.txt"
+        unk_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['unknown_page']}"
         with open(unk_path, "w", encoding="utf-8") as f:
             f.write("\n".join(unknown_page_urls) + "\n")
         print(f"⛔ unknown 페이지 skip {len(unknown_page_urls)}개 → {unk_path}")
 
     # ── 일일 리포트 (최신 날짜가 항상 B~D열) ──────────────────
-    write_daily_report(rows, ts.split("_")[0])
+    write_daily_report(csv_path, ts.split("_")[0])
 
     print("✨ 모든 캡처 완료!")
 

@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260722_v3.3.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260723_v3.4.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260722_v3.3.py
+python page_capture_260723_v3.4.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260722_v3.3.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260722_v3.3.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260723_v3.4.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260722_v3.3.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260723_v3.4.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
@@ -94,13 +94,14 @@ VN_MO_offer_campaign-name_page_0706.png
 ```
 
 - 사이트코드는 URL path 의 첫 국가 세그먼트에서 추출 (`/nz/` → `NZ`). `TARGET_DOMAIN_CN` 매칭 도메인은 host 기준으로 `CN`, path 가 없으면 `GLOBAL` 로 fallback.
-- 리다이렉트/에러/unknown/로그인 으로 스킵된 URL 은 `skipped_redirect_{ts}.txt` / `skipped_error_page_{ts}.txt` / `skipped_unknown_page_{ts}.txt` / `skipped_login_page_{ts}.txt` 로 기록됩니다.
-- **`result_{ts}.csv`** 에는 `(url, device)` 단위로 `result / final_url / http_status / title / detail / elapsed` 가 남습니다. txt 는 URL 단위라 "PC 는 정상인데 MO 만 실패" 를 구분하지 못하고 `error`/`timeout` 은 아예 기록되지 않으므로, 재실행 대상 파악에는 이 CSV 를 쓰세요.
-- 같은 날 다시 실행하면 이미 있는 PNG+MHTML 은 건너뜁니다(`SKIP_IF_EXISTS`). 중단 후 이어받기가 목적이며, 다시 받고 싶으면 파일을 지우거나 옵션을 끄면 됩니다.
+- 리다이렉트/에러/unknown/로그인 으로 스킵된 URL 은 `_skipped_redirect.txt` / `_skipped_error_page.txt` / `_skipped_unknown_page.txt` / `_skipped_login_page.txt` 로 기록됩니다.
+- **`_result_latest.csv`** 에는 `(url, device)` 단위로 `result / final_url / http_status / title / detail / elapsed` 가 남습니다. txt 는 URL 단위라 "PC 는 정상인데 MO 만 실패" 를 구분하지 못하고 `error`/`timeout` 은 아예 기록되지 않으므로, 재실행 대상 파악에는 이 CSV 를 쓰세요.
+- 같은 날 다시 실행하면 이미 있는 PNG+MHTML 은 건너뜁니다(`SKIP_IF_EXISTS`). 중단 후 이어받기가 목적이며, 다시 받고 싶으면 파일을 지우거나 옵션을 끄면 됩니다. 캡처물을 `foldering_move_png.py` 로 sitecode 폴더에 옮긴 뒤에도 `{OUTPUT_DIR}/{SITECODE}/` 를 함께 확인하므로 이어하기가 계속 동작합니다(v3.4).
 - 캡처 후 `foldering_move_png.py` 를 돌리면 위 PNG 들이 사이트코드별 하위 폴더로 정리됩니다.
-- **`run_{ts}.log`** 에 실행 로그가 남습니다(`LOG_TO_FILE`). 작업 스케줄러에서 `pythonw` 로 돌리면 콘솔 출력이 버려지므로, 실패·지연을 나중에 확인하려면 이 파일을 보세요. `STACK_DUMP_INTERVAL` 주기로 전체 스레드 스택도 함께 남아 "어디서 멈췄는지" 를 그대로 보여줍니다.
-- **`daily_report.xlsx`** 는 날짜별 결과를 한 파일에 누적합니다. A열 = URL, **최신 날짜가 항상 B~D열**(PC / MO / 이슈)이고 이전 날짜는 오른쪽(E~G, H~J …)으로 밀립니다. 같은 날 다시 실행하면 그 날짜 블록을 덮어씁니다. 저장된 칸은 초록, 문제 있는 칸은 빨강으로 칠해집니다.
-- `PREFILTER_HTTP` 가 켜져 있으면 캡처 전에 URL 상태코드를 먼저 확인해, `404`/`5xx` 는 브라우저를 띄우지 않고 `error_page` 로 확정합니다(대상이 수백 개일 때 실행 시간이 크게 줄어듭니다). 판정 결과는 동일하게 `result_{ts}.csv` 에 남고 `detail` 에 `사전 확인` 이라고 표시됩니다.
+- **`_run_latest.log`** 에 실행 로그가 남습니다(`LOG_TO_FILE`). 작업 스케줄러에서 `pythonw` 로 돌리면 콘솔 출력이 버려지므로, 실패·지연을 나중에 확인하려면 이 파일을 보세요. `STACK_DUMP_INTERVAL` 을 0 보다 크게 두면 그 주기로 전체 스레드 스택도 남지만, **기본값은 0(끔)** 입니다 — v3.4 참고.
+- **`_daily_report.xlsx`** 는 날짜별 결과를 한 파일에 누적합니다. A열 = URL, **최신 날짜가 항상 B~D열**(PC / MO / 이슈)이고 이전 날짜는 오른쪽(E~G, H~J …)으로 밀립니다. 같은 날 다시 실행하면 그 날짜 블록을 덮어씁니다. 저장된 칸은 초록, 문제 있는 칸은 빨강으로 칠해집니다. **실행 중에도 `REPORT_FLUSH_EVERY` 건마다 갱신**되므로, 중간에 프로세스가 죽어도 그 시점까지의 결과가 남습니다.
+- 산출물 파일명은 전부 고정(언더바 접두)이라 날짜별로 쌓이지 않습니다 — 이력은 `_daily_report.xlsx` 한 파일이 갖습니다. 파일명을 바꾸려면 `RESULT_CSV_NAME` / `RUN_LOG_NAME` / `SKIPPED_TXT_NAMES` / `DAILY_REPORT_NAME` 을 보세요.
+- `PREFILTER_HTTP` 가 켜져 있으면 캡처 전에 URL 상태코드를 먼저 확인해, `404`/`5xx` 는 브라우저를 띄우지 않고 `error_page` 로 확정합니다(대상이 수백 개일 때 실행 시간이 크게 줄어듭니다). 판정 결과는 동일하게 `_result_latest.csv` 에 남고 `detail` 에 `사전 확인` 이라고 표시됩니다.
 
 ## 요구사항
 
@@ -153,6 +154,10 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.3 | 2026-07-22 | **신뢰성**: 태스크 하드 데드라인(`TASK_DEADLINE_MO`/`_PC`) — 감시 스레드가 상한 초과 워커의 드라이버를 끊어 전체 실행이 물리는 것을 막음 + 시작 시 이전 실행 잔재(headless chrome/chromedriver) 정리 |
 | v3.3 | 2026-07-22 | **속도**: HTTP 사전 필터(`PREFILTER_HTTP`) — 404/5xx 는 브라우저 없이 확정. 실측상 워커시간의 58%가 죽은 URL 확인에 쓰였고 대상 URL 의 84%가 PC·MO 양쪽 死였다. `403` 은 봇 차단일 수 있어 제외하고, soft-404 는 기존 og:url 검사가 계속 담당 |
 | v3.3 | 2026-07-22 | **산출물**: 일일 리포트 `daily_report.xlsx` — 최신 날짜가 항상 B~D열(PC/MO/이슈)이고 과거 날짜는 오른쪽으로 밀림(같은 날 재실행은 덮어쓰기). MO 하단 흰 여백 트림(`TRIM_TRAILING_BLANK`) |
+| v3.4 | 2026-07-23 | **크래시**: `STACK_DUMP_INTERVAL` 기본 OFF. 이 기능을 켠 뒤 access violation(`0xC0000005`) 이 2회 발생했고 둘 다 "덤프 출력 도중"이었다. 하드 크래시는 `finally` 도 실행되지 않아, 절반쯤에서 죽으면 큐 뒤쪽이 통째로 결번되고 산출물도 하나도 안 남는다(실제로 하루치 캡처의 27%가 그렇게 빠졌다). hang 추적은 run 로그 + 데드라인 감시로 충분 |
+| v3.4 | 2026-07-23 | **산출물**: 날짜별 `result_*.csv` / `run_*.log` 누적을 폐지하고 고정명·언더바 접두로 통일 — `_daily_report.xlsx` / `_result_latest.csv` / `_run_latest.log` / `_skipped_*.txt` |
+| v3.4 | 2026-07-23 | **리포트 내구성**: `write_daily_report` 가 메모리 `rows` 대신 result CSV 를 읽고 `REPORT_FLUSH_EVERY` 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다 |
+| v3.4 | 2026-07-23 | **이어하기**: `already_captured()` — `SKIP_IF_EXISTS` 가 `OUTPUT_DIR` 루트만 보던 탓에 foldering 후에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 `{OUTPUT_DIR}/{SITECODE}/` 도 확인 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
