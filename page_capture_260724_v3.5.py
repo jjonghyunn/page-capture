@@ -1,4 +1,4 @@
-# page_capture_260723_v3.4.py
+# page_capture_260724_v3.5.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -29,6 +29,7 @@
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [산출물] 날짜별 result CSV·run 로그 누적을 폐지하고 고정명·언더바 접두로 통일 — _daily_report.xlsx / _result_latest.csv / _run_latest.log / _skipped_*.txt (RESULT_CSV_NAME·RUN_LOG_NAME·SKIPPED_TXT_NAMES). 이력은 일일 리포트 한 파일이 갖고, 폴더 맨 위에 모여 보인다
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [리포트 내구성] write_daily_report 가 메모리 rows 대신 result CSV 를 읽도록 바꾸고 REPORT_FLUSH_EVERY(기본 50) 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [이어하기] already_captured() 신설 — SKIP_IF_EXISTS 가 OUTPUT_DIR 루트만 보던 탓에, 캡처물을 sitecode 폴더로 옮기는 foldering 을 돌린 뒤에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 {OUTPUT_DIR}/{SITECODE}/ 도 함께 확인한다
+# 2026-07-24  Jonghyun Park w/ Claude  — v3.5 [산출물 축소] 폴더에 _daily_report.xlsx 하나만 남긴다: LOG_TO_FILE 기본 OFF(_run_latest.log 미생성) / WRITE_SKIPPED_TXT=False(_skipped_*.txt 미생성, 개수는 콘솔로) / KEEP_RESULT_CSV=False(_result_latest.csv 는 실행 중엔 리포트 입력으로 유지하다 완주 후 삭제). 크래시 시엔 CSV 가 남아 사후 추적 가능
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -153,7 +154,10 @@ MIN_MHTML_BYTES = 20000
 # ── 실행 로그 / 잔재 정리 ────────────────────────────────────
 # 작업 스케줄러는 pythonw 로 돌아 콘솔 출력이 통째로 버려진다. 그래서 hang 이 나도
 # "어디서 멈췄는지" 를 사후에 알 수 없었다(2026-07-21·22). 파일로 같이 남긴다.
-LOG_TO_FILE = True
+# ⚠ 2026-07-24: 산출물을 _daily_report.xlsx 하나로만 남기려고 기본 OFF 로 전환.
+#   끄면 pythonw 스케줄 실행에서 hang/크래시 원인 추적용 콘솔 로그가 사라진다 — hang 을
+#   다시 파야 하면 True 로 되돌릴 것. (데드라인 감시 TASK_DEADLINE_* 는 그대로 동작한다.)
+LOG_TO_FILE = False
 # 실행 로그 파일명 — 날짜별로 쌓지 않고 매 실행 덮어쓴다(언더바 접두 = 폴더 맨 위 정렬).
 RUN_LOG_NAME = "_run_latest.log"
 # 이 간격(초)마다 전체 스레드 스택을 로그에 덤프. 0 이면 끔.
@@ -204,7 +208,15 @@ DAILY_REPORT_NAME = "_daily_report.xlsx"
 DAILY_REPORT_COLS = 3
 # 결과 CSV 파일명 — 실행 중 건별로 append 되는 안전망. 날짜별로 쌓지 않고 매 실행 덮어쓴다.
 # (이력은 일일 리포트가 갖는다)
+# ⚠ 이 CSV 는 write_daily_report 의 입력 원본이라 실행 중에는 반드시 필요하다(메모리 rows 가
+#   아니라 디스크 CSV 를 읽는다 — access violation 대비, 2026-07-23). 그래서 "안 만들기"가 아니라
+#   완주 후 삭제하는 방식으로 폴더에서 치운다(KEEP_RESULT_CSV=False). 크래시 시엔 남아 사후 추적용.
 RESULT_CSV_NAME = "_result_latest.csv"
+# 완주(정상 종료) 후 결과 CSV 를 남길지. False = 리포트 갱신까지 마친 뒤 삭제(폴더엔 리포트만 남음).
+# 크래시로 중단되면 이 값과 무관하게 CSV 가 남아 그 시점까지의 판정을 볼 수 있다.
+KEEP_RESULT_CSV = False
+# skip 사유별 txt 파일을 따로 남길지. False = 안 남김(같은 정보가 리포트 '이슈' 열에 이미 있다).
+WRITE_SKIPPED_TXT = False
 # skip 사유별 txt 파일명 — 역시 고정명(누적 X). 같은 정보가 리포트 '이슈' 열에도 남는다.
 SKIPPED_TXT_NAMES = {
     "redirect":     "_skipped_redirect.txt",
@@ -1575,36 +1587,35 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     print(f"📄 결과 CSV {len(rows)}행 → {csv_path}")
     print("   " + " / ".join(f"{k}:{v}" for k, v in sorted(_cnt.items())))
 
-    # ── skip된 URL을 txt 파일로 저장 ──────────────────────────
-    if skipped_urls:
-        skip_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['redirect']}"
-        with open(skip_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(skipped_urls) + "\n")
-        print(f"⏭️  리다이렉트 skip {len(skipped_urls)}개 → {skip_path}")
-
-    # ── 에러 페이지 URL을 txt 파일로 저장 ─────────────────────
-    if error_page_urls:
-        err_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['error_page']}"
-        with open(err_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(error_page_urls) + "\n")
-        print(f"⛔ 에러 페이지 skip {len(error_page_urls)}개 → {err_path}")
-
-    # ── 로그인/인증 화면 URL을 txt 파일로 저장 ────────────────
-    if login_page_urls:
-        login_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['login_page']}"
-        with open(login_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(login_page_urls) + "\n")
-        print(f"🔒 로그인 화면 skip {len(login_page_urls)}개 → {login_path}")
-
-    # ── unknown(soft-404) 페이지 URL을 txt 파일로 저장 ────────
-    if unknown_page_urls:
-        unk_path = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES['unknown_page']}"
-        with open(unk_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(unknown_page_urls) + "\n")
-        print(f"⛔ unknown 페이지 skip {len(unknown_page_urls)}개 → {unk_path}")
+    # ── skip된 URL 요약(콘솔) + 선택적 txt 저장 ───────────────
+    # 개수는 항상 콘솔에 찍고, 파일은 WRITE_SKIPPED_TXT 일 때만 남긴다
+    # (같은 정보가 _daily_report.xlsx '이슈' 열에 이미 들어간다).
+    for label, urls_list, key in (
+        ("⏭️  리다이렉트 skip", skipped_urls,      "redirect"),
+        ("⛔ 에러 페이지 skip", error_page_urls,   "error_page"),
+        ("🔒 로그인 화면 skip", login_page_urls,   "login_page"),
+        ("⛔ unknown 페이지 skip", unknown_page_urls, "unknown_page"),
+    ):
+        if not urls_list:
+            continue
+        if WRITE_SKIPPED_TXT:
+            p = f"{OUTPUT_DIR}/{SKIPPED_TXT_NAMES[key]}"
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("\n".join(urls_list) + "\n")
+            print(f"{label} {len(urls_list)}개 → {p}")
+        else:
+            print(f"{label} {len(urls_list)}개")
 
     # ── 일일 리포트 (최신 날짜가 항상 B~D열) ──────────────────
     write_daily_report(csv_path, ts.split("_")[0])
+
+    # ── 완주했으니 결과 CSV 를 치운다(폴더엔 _daily_report.xlsx 만 남긴다) ──
+    # 리포트 갱신을 마친 뒤이므로 이력은 리포트가 이미 갖고 있다. 크래시 시엔 여기 못 와서 CSV 가 남는다.
+    if not KEEP_RESULT_CSV:
+        try:
+            os.remove(csv_path)
+        except OSError as e:
+            print(f"  ⚠️ 결과 CSV 삭제 실패(무시): {e}")
 
     print("✨ 모든 캡처 완료!")
 
