@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-22  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-24  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -22,7 +22,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 ```python
 OUTPUT_DIR = r"C:\Users\user_name\Downloads\captures"
 
-MAX_WORKERS = 4                                      # 동시 헤드리스 Chrome 수 (1개당 ~300-500MB RAM). 사양별 권장값은 스크립트 주석 참고 (16GB→4~6, 32GB→8~10)
+MAX_WORKERS = 4                                      # 동시 헤드리스 Chrome 수 (1개당 ~300-500MB RAM). 사양별 권장값은 스크립트 주석 참고 (16GB→4~6, 32GB+→12~14)
 
 TARGET_DOMAIN = "example.com"                        # 메인 글로벌 도메인
 TARGET_DOMAIN_CN = ("example.com.cn", "example.cn")  # 중국 사이트 — 별도 사이트코드 'CN' 부여
