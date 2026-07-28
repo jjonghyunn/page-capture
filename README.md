@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260724_v3.5.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260728_v3.6.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260724_v3.5.py
+python page_capture_260728_v3.6.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260724_v3.5.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260724_v3.5.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260728_v3.6.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260724_v3.5.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260728_v3.6.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. PNG 정리
@@ -160,6 +160,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.4 | 2026-07-23 | **리포트 내구성**: `write_daily_report` 가 메모리 `rows` 대신 result CSV 를 읽고 `REPORT_FLUSH_EVERY` 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다 |
 | v3.4 | 2026-07-23 | **이어하기**: `already_captured()` — `SKIP_IF_EXISTS` 가 `OUTPUT_DIR` 루트만 보던 탓에 foldering 후에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 `{OUTPUT_DIR}/{SITECODE}/` 도 확인 |
 | v3.5 | 2026-07-24 | **산출물 축소**: 폴더에 `_daily_report.xlsx` 하나만 남긴다. `LOG_TO_FILE` 기본 OFF(`_run_latest.log` 미생성) / `WRITE_SKIPPED_TXT=False`(`_skipped_*.txt` 미생성, 개수는 콘솔) / `KEEP_RESULT_CSV=False`(`_result_latest.csv` 는 리포트 입력으로 실행 중엔 유지하다 완주 후 삭제). 셋 다 켜면 종전 동작. 크래시 시엔 CSV 가 남아 사후 추적 가능 |
+| v3.6 | 2026-07-28 | **리포트 유실 방지**: `_daily_report.xlsx` 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 `wb.save(최종경로)` 에 들어가 `styles.xml`/`workbook.xml`/`[Content_Types].xml` 을 못 쓴 채 끝났고, `ZipFile.__del__` 이 그 반쪽짜리를 닫아 Excel 이 거부했다 — 날아간 건 오늘치가 아니라 **누적 이력 전체**. 저장을 임시파일 → 필수 파트 검증 → `os.replace` 로 바꿔 실패해도 원본이 남고, 기존 파일이 손상돼 있으면 `.broken_<ts>` 로 격리 후 새로 시작한다. 저장 전 여유공간도 확인(`DAILY_REPORT_MIN_FREE_MB`, 기본 200MB) |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 

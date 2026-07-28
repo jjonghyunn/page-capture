@@ -1,4 +1,4 @@
-# page_capture_260724_v3.5.py
+# page_capture_260728_v3.6.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -30,6 +30,7 @@
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [리포트 내구성] write_daily_report 가 메모리 rows 대신 result CSV 를 읽도록 바꾸고 REPORT_FLUSH_EVERY(기본 50) 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [이어하기] already_captured() 신설 — SKIP_IF_EXISTS 가 OUTPUT_DIR 루트만 보던 탓에, 캡처물을 sitecode 폴더로 옮기는 foldering 을 돌린 뒤에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 {OUTPUT_DIR}/{SITECODE}/ 도 함께 확인한다
 # 2026-07-24  Jonghyun Park w/ Claude  — v3.5 [산출물 축소] 폴더에 _daily_report.xlsx 하나만 남긴다: LOG_TO_FILE 기본 OFF(_run_latest.log 미생성) / WRITE_SKIPPED_TXT=False(_skipped_*.txt 미생성, 개수는 콘솔로) / KEEP_RESULT_CSV=False(_result_latest.csv 는 실행 중엔 리포트 입력으로 유지하다 완주 후 삭제). 크래시 시엔 CSV 가 남아 사후 추적 가능
+# 2026-07-28  Jonghyun Park w/ Claude  — v3.6 [리포트 유실 방지] 운영 중 _daily_report.xlsx 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 wb.save(최종경로) 에 들어가 styles.xml/workbook.xml/[Content_Types].xml 을 못 쓴 채 끝났고, ZipFile.__del__ 이 그 반쪽짜리를 닫아 Excel 이 거부 — 날아간 건 오늘치가 아니라 누적 7일치였다(값은 inlineStr 라 sheet1.xml 에서 전량 복구). ① 저장을 임시파일 → 필수 파트 검증 → os.replace 로 바꿔 실패해도 원본이 남게 함 ② 기존 파일 손상으로 load_workbook 이 실패하면 .broken_<ts> 로 격리 후 새로 시작(매 실행 같은 자리에서 죽던 것 방지) ③ 저장 전 여유공간 검사(DAILY_REPORT_MIN_FREE_MB, 기본 200MB) — 부족하면 아예 손대지 않는다
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -58,6 +59,8 @@ import csv
 import sys
 import base64
 import threading
+import shutil
+import zipfile
 import faulthandler
 import subprocess
 import atexit
@@ -206,6 +209,9 @@ DAILY_REPORT = True
 DAILY_REPORT_NAME = "_daily_report.xlsx"
 # 하루당 열 개수(PC 결과 / MO 결과 / 이슈) — 구조를 바꾸려면 write_daily_report 도 같이 볼 것
 DAILY_REPORT_COLS = 3
+# 리포트를 저장하기 전에 최소 이만큼(MB) 여유공간이 있어야 한다. 부족하면 저장을 아예 건너뛴다.
+# 0 이면 검사 안 함. (2026-07-28: 디스크가 꽉 찬 상태에서 저장이 중간에 끊겨 리포트가 깨졌다)
+DAILY_REPORT_MIN_FREE_MB = 200
 # 결과 CSV 파일명 — 실행 중 건별로 append 되는 안전망. 날짜별로 쌓지 않고 매 실행 덮어쓴다.
 # (이력은 일일 리포트가 갖는다)
 # ⚠ 이 CSV 는 write_daily_report 의 입력 원본이라 실행 중에는 반드시 필요하다(메모리 rows 가
@@ -1259,9 +1265,33 @@ def write_daily_report(csv_path, run_date, quiet=False):
             issues.append("PC 미저장")
         day_vals[u] = (pc, mo, " / ".join(issues))
 
+    # ── 저장할 공간이 없으면 아예 손대지 않는다 ──────────────────────────
+    # 디스크가 꽉 찬 상태로 save 에 들어가면 파일을 절반만 쓰고 죽어서, 여태 쌓인 이력을
+    # 통째로 날린다(2026-07-28 실제 발생). 못 쓸 상황이면 기존 파일을 건드리지 않는 게 낫다.
+    if DAILY_REPORT_MIN_FREE_MB:
+        try:
+            free_mb = shutil.disk_usage(OUTPUT_DIR).free / (1024 * 1024)
+            if free_mb < DAILY_REPORT_MIN_FREE_MB:
+                print(f"  ⚠️ 일일 리포트 건너뜀(디스크 여유 {free_mb:,.0f}MB "
+                      f"< {DAILY_REPORT_MIN_FREE_MB}MB) — 기존 파일 보존")
+                return None
+        except OSError:
+            pass
+
     header = run_date          # 예: "0722"
     if os.path.exists(path):
-        wb = load_workbook(path)
+        try:
+            wb = load_workbook(path)
+        except Exception as e:
+            # 깨진 파일을 그대로 두면 매 실행마다 여기서 죽는다. 옆으로 치우고 새로 시작한다.
+            broken = f"{path}.broken_{time.strftime('%y%m%d_%H%M')}"
+            try:
+                os.replace(path, broken)
+                print(f"  ⚠️ 기존 리포트가 손상돼 있어 치워두고 새로 만든다: {os.path.basename(broken)} ({e})")
+            except OSError as e2:
+                print(f"  ⚠️ 일일 리포트 건너뜀(손상 파일 이동 실패): {e2}")
+                return None
+            return write_daily_report(csv_path, run_date, quiet=quiet)
         ws = wb.active
         # 이미 같은 날짜 블록이 있으면 그 자리에 덮어쓴다
         existing = {ws.cell(row=1, column=c).value: c
@@ -1327,7 +1357,29 @@ def write_daily_report(csv_path, run_date, quiet=False):
     for off in range(N):
         ws.cell(row=2, column=base + off).font = Font(bold=True)
 
-    wb.save(path)
+    # ── 저장: 임시파일 → 무결성 확인 → 원자적 교체 ──────────────────────
+    # ⚠ wb.save(path) 로 최종 파일에 직접 쓰면 안 된다. save 도중 예외(디스크 풀·파일 잠금)가
+    #   나면 openpyxl 이 [Content_Types].xml / workbook.xml / styles.xml 을 못 쓴 채 끝나고,
+    #   ZipFile.__del__ 이 그 반쪽짜리를 닫아버려 Excel 이 "손상됨" 으로 거부한다.
+    #   그때 날아가는 건 오늘치가 아니라 **누적된 전체 이력**이다(2026-07-28 7일치 사망).
+    #   임시파일에 먼저 쓰고 필수 파트가 다 들어갔는지 확인한 뒤에만 원본 자리에 옮긴다.
+    tmp = f"{path}.tmp"
+    try:
+        wb.save(tmp)
+        with zipfile.ZipFile(tmp) as zf:
+            missing = {"[Content_Types].xml", "_rels/.rels",
+                       "xl/workbook.xml", "xl/styles.xml"} - set(zf.namelist())
+        if missing:
+            raise OSError(f"저장 결과에 필수 파트 누락: {sorted(missing)}")
+        os.replace(tmp, path)          # 같은 볼륨이면 원자적 — 교체 실패해도 원본은 그대로
+    except Exception as e:
+        print(f"  ⚠️ 일일 리포트 저장 실패(기존 파일은 보존됨): {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None
+
     if not quiet:
         n_issue = sum(1 for v in day_vals.values() if v[2])
         print(f"📊 일일 리포트 갱신: {path}  (최신 {header} = B~{get_column_letter(base + N - 1)}열, "
