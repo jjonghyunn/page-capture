@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-24  Jonghyun Park w/ Claude</sub>  
+<sub>2026-07-29  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -10,7 +10,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 | 파일 | 설명 |
 |---|---|
 | `page_capture_260728_v3.6.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
-| `foldering_move_png.py` | 캡처된 PNG를 사이트코드별 하위 폴더로 정리 |
+| `foldering_move_png.py` | 캡처된 PNG를 파일명의 첫 `_PC`/`_MO` 토큰 **앞부분** 기준으로 하위 폴더 정리 (위 캡처 파일명 규칙에선 사이트코드가 됨). `PC`/`MO` 토큰이 없는 PNG는 건너뜀 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
 
@@ -65,7 +65,7 @@ schtasks /create /tn page_capture ^
 
 ### 5. PNG 정리
 캡처 완료 후 `foldering_move_png.py`를 실행하면  
-사이트코드별 하위 폴더로 자동 분류됩니다.
+파일명의 첫 `_PC`/`_MO` 토큰 앞부분(= 위 명명 규칙의 사이트코드)별 하위 폴더로 자동 분류됩니다.
 
 > ⚠️ **MO(모바일) 파일을 먼저 옮긴 뒤 실행하세요.** 정리 스크립트는 PC/MO 를 구분하지 않으므로, 같은 폴더에 섞여 있으면 의도치 않게 함께 분류됩니다.
 
