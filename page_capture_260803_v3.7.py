@@ -1,4 +1,4 @@
-# page_capture_260728_v3.6.py
+# page_capture_260803_v3.7.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -31,6 +31,7 @@
 # 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [이어하기] already_captured() 신설 — SKIP_IF_EXISTS 가 OUTPUT_DIR 루트만 보던 탓에, 캡처물을 sitecode 폴더로 옮기는 foldering 을 돌린 뒤에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 {OUTPUT_DIR}/{SITECODE}/ 도 함께 확인한다
 # 2026-07-24  Jonghyun Park w/ Claude  — v3.5 [산출물 축소] 폴더에 _daily_report.xlsx 하나만 남긴다: LOG_TO_FILE 기본 OFF(_run_latest.log 미생성) / WRITE_SKIPPED_TXT=False(_skipped_*.txt 미생성, 개수는 콘솔로) / KEEP_RESULT_CSV=False(_result_latest.csv 는 실행 중엔 리포트 입력으로 유지하다 완주 후 삭제). 크래시 시엔 CSV 가 남아 사후 추적 가능
 # 2026-07-28  Jonghyun Park w/ Claude  — v3.6 [리포트 유실 방지] 운영 중 _daily_report.xlsx 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 wb.save(최종경로) 에 들어가 styles.xml/workbook.xml/[Content_Types].xml 을 못 쓴 채 끝났고, ZipFile.__del__ 이 그 반쪽짜리를 닫아 Excel 이 거부 — 날아간 건 오늘치가 아니라 누적 7일치였다(값은 inlineStr 라 sheet1.xml 에서 전량 복구). ① 저장을 임시파일 → 필수 파트 검증 → os.replace 로 바꿔 실패해도 원본이 남게 함 ② 기존 파일 손상으로 load_workbook 이 실패하면 .broken_<ts> 로 격리 후 새로 시작(매 실행 같은 자리에서 죽던 것 방지) ③ 저장 전 여유공간 검사(DAILY_REPORT_MIN_FREE_MB, 기본 200MB) — 부족하면 아예 손대지 않는다
+# 2026-08-03  Jonghyun Park w/ Claude  — v3.7 [기동 hang 방지] ① 감시 스레드가 끊을 대상(driver/service)이 없으면 killed 를 안 세우고 다음 주기에 재시도(예전엔 driver 가 None 인데 killed 를 먼저 세워 kill 실패 후 영구 정지 — 워커 1개가 76분 잡힌 사례) ② Service 객체를 먼저 감시에 등록하고 webdriver.Chrome(service=svc) 호출 — 세션 핸드셰이크 hang 을 svc.process.kill() 로 끊는다 ③ 재사용 driver 를 get_driver() 진입 시점에 등록(헬스체크·quit 구간도 감시) ④ DRIVER_START_TIMEOUT(기본 120초) 보조 그물 — 초과 시 TimeoutException 으로 result=timeout(detail 'driver_start_timeout:') ⑤ CHROMEDRIVER_EXE 상수 — 비우면 종전대로 Selenium Manager, 값을 넣으면 경로 고정으로 해석 단계 생략
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -43,6 +44,7 @@
 #  skip 하므로, Snapshot-Content-Location = 요청한 URL 이 보장됨)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -187,6 +189,17 @@ DEADLINE_CHECK_INTERVAL = 15  # 감시 주기(초)
 # ⚠ selenium 의 quit 경로(send_remote_shutdown_command → is_connectable)는 타임아웃이 없어
 #   chromedriver 가 응답을 멈추면 영구 대기한다 — 2026-07-22 스택 덤프로 확인된 실제 hang 지점.
 QUIT_TIMEOUT = 30
+# chromedriver 실행파일 경로. 비우면 Selenium Manager 가 워커마다 경로를 해석한다(캐시 미스 시 네트워크 접근).
+# 값을 넣으면 그 단계를 건너뛰어 기동이 빨라지고, 기동이 물릴 요인이 하나 줄어든다.
+# ⚠ 이 구간은 chromedriver 프로세스가 아직 없어 감시가 끊을 수 없다 → 경로 고정이 유일한 예방책.
+CHROMEDRIVER_EXE = ""
+# Chrome 기동(드라이버 경로 해석 + chromedriver 기동 + 세션 생성) 상한(초). 0 이면 끔.
+# 넘기면 그 (url, device) 를 timeout 으로 확정하고 다음 작업으로 간다.
+# ⚠ 실측 정상 기동은 수 초. (태스크 최대 401초/278초는 "페이지 처리" 시간이라 이 값의 근거가 아니다)
+DRIVER_START_TIMEOUT = 120
+# 데드라인을 넘겼는데 아직 끊을 대상(driver/service)이 없을 때 경고를 다시 찍는 간격(초).
+# 감시 주기(15초)마다 찍으면 로그가 폭주하므로 첫 1회 + 이 간격으로만 남긴다.
+MISSING_TARGET_WARN_INTERVAL = 60
 
 # ── HTTP 사전 필터 ───────────────────────────────────────────
 # 브라우저를 띄우기 전에 URL 상태코드를 먼저 확인해, 확실히 죽은 것은 Chrome 없이 확정한다.
@@ -866,9 +879,21 @@ def _build_options(device_type):
     o.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     return o, vw, vh
 
-def _new_driver(device_type):
+def _new_driver(device_type, owner_ident=None):
+    """Chrome 을 새로 띄운다.
+
+    ⚠ Service 객체를 먼저 만들어 감시(watchdog)에 등록한 뒤 webdriver.Chrome 에 넘긴다.
+      webdriver.Chrome() 은 내부에서 service.start() → 세션 생성까지 도는데, 예전엔 이 안에서 물리면
+      감시가 끊을 대상(driver)이 아직 없어 워커가 영구 정지했다(2026-08-03: 마지막 1건이 76분 정지).
+      svc.process 는 start() 안에서 채워지므로, 등록해두면 세션 핸드셰이크 hang 을 끊을 수 있다.
+      (Service 를 미리 start() 하면 안 된다 — webdriver.Chrome 이 무조건 start() 를 다시 불러
+       chromedriver 가 두 개 뜬다. selenium 4.41 확인)
+    owner_ident: 별도 스레드에서 기동할 때(_new_driver_guarded) 원래 워커 스레드 id.
+    """
     o, vw, vh = _build_options(device_type)
-    d = webdriver.Chrome(options=o)
+    svc = Service(executable_path=CHROMEDRIVER_EXE) if CHROMEDRIVER_EXE else Service()
+    _register_service_for_deadline(svc, owner_ident)
+    d = webdriver.Chrome(options=o, service=svc)
     d.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     d.set_script_timeout(SCRIPT_TIMEOUT)
     if device_type == "MO":
@@ -879,11 +904,47 @@ def _new_driver(device_type):
         _all_drivers.append(d)
     return d, vw, vh
 
+
+def _new_driver_guarded(device_type):
+    """DRIVER_START_TIMEOUT 안에 Chrome 이 안 뜨면 포기한다 (보조 그물).
+
+    1차 방어는 감시 스레드가 svc.process 를 끊는 것이고, 이건 그보다 앞 단계
+    — Selenium Manager 의 드라이버 경로 해석처럼 **아직 프로세스가 없어 못 끊는 구간** — 까지 덮는다.
+    ⚠ 파이썬 스레드는 강제 종료가 안 된다. 물린 기동 스레드는 daemon 이라 프로세스 종료 때 사라지고,
+      뒤늦게 떠버린 chromedriver 는 다음 실행의 SWEEP_STALE_CHROME 이 정리한다.
+    """
+    if not DRIVER_START_TIMEOUT:
+        return _new_driver(device_type)
+
+    owner = threading.get_ident()      # 기동은 별도 스레드에서 돌지만 감시 등록은 워커 것으로
+    box = {}
+
+    def _mk():
+        try:
+            box["r"] = _new_driver(device_type, owner)
+        except Exception as e:
+            box["e"] = e
+
+    th = threading.Thread(target=_mk, daemon=True, name=f"driver-start-{device_type}")
+    th.start()
+    th.join(DRIVER_START_TIMEOUT)
+    if "r" in box:
+        return box["r"]
+    if "e" in box:
+        raise box["e"]
+    # TimeoutException 으로 던져야 capture_page 가 result=timeout 으로 남긴다 (error 와 구분)
+    raise TimeoutException(f"driver_start_timeout: Chrome 기동 {DRIVER_START_TIMEOUT}초 초과")
+
+
 def get_driver(device_type):
     """이 스레드가 쓸 driver 를 돌려준다. REUSE_DRIVER 면 재사용, 아니면 매번 새로."""
     if not REUSE_DRIVER:
-        return _new_driver(device_type)
+        return _new_driver_guarded(device_type)
     cur = getattr(_tls, "driver", None)
+    # ⚠ 재사용 driver 도 여기서 먼저 감시에 붙인다 — 아래 헬스체크(current_url)·_quit_driver 도
+    #   응답이 멈추면 물리는 지점인데, 예전엔 capture_page 가 이 함수 "반환 후"에 등록해 사각지대였다.
+    if cur is not None:
+        _register_driver_for_deadline(cur)
     if cur is not None and getattr(_tls, "device", None) == device_type:
         try:
             # 세션이 살아있는지 확인 (죽었으면 예외 → 새로 만든다)
@@ -900,7 +961,7 @@ def get_driver(device_type):
             _quit_driver(cur)
     elif cur is not None:
         _quit_driver(cur)                     # device 가 바뀌면 닫고 새로
-    d, vw, vh = _new_driver(device_type)
+    d, vw, vh = _new_driver_guarded(device_type)
     _tls.driver, _tls.device, _tls.vw, _tls.vh = d, device_type, vw, vh
     return d, vw, vh
 
@@ -1187,11 +1248,15 @@ def capture_page(url, device_type):
         return _ret("ok")
 
     except TimeoutException as e:
-        # PAGE_LOAD_TIMEOUT / SCRIPT_TIMEOUT 초과 — 실패로 확정하고 다음 작업으로
-        print(f"  ⏱️  타임아웃({PAGE_LOAD_TIMEOUT}초) → skip: {url}")
+        # PAGE_LOAD_TIMEOUT / SCRIPT_TIMEOUT 초과 또는 Chrome 기동 타임아웃 — 실패로 확정하고 다음 작업으로
+        # (기동 타임아웃은 detail 이 'driver_start_timeout:' 으로 시작해 사후 집계에서 구분된다)
+        if str(e).startswith("driver_start_timeout"):
+            print(f"  ⏱️  Chrome 기동 타임아웃({DRIVER_START_TIMEOUT}초) → skip: {device_type} {url}")
+        else:
+            print(f"  ⏱️  타임아웃({PAGE_LOAD_TIMEOUT}초) → skip: {url}")
         # 재사용 driver 는 로딩이 걸린 채로 남아 다음 URL 까지 망칠 수 있으니 로딩을 끊는다
         try:
-            driver.execute_script("window.stop();")
+            driver.execute_script("window.stop();")     # driver 가 None(기동 실패)이면 아래 except 로
         except Exception:
             drop_thread_driver()
         return _ret("timeout", str(e).split('\n')[0][:200])
@@ -1451,6 +1516,18 @@ def _register_driver_for_deadline(driver):
             cur["driver"] = driver
 
 
+def _register_service_for_deadline(svc, ident=None):
+    """기동 중인 chromedriver Service 를 감시 대상에 붙인다.
+
+    driver 객체가 만들어지기 전(webdriver.Chrome() 내부)에도 끊을 수 있게 하려는 것.
+    ident 는 기동을 별도 스레드에서 돌릴 때(_new_driver_guarded) 원래 워커 스레드 id.
+    """
+    with _inflight_lock:
+        cur = _inflight.get(ident or threading.get_ident())
+        if cur is not None:
+            cur["service"] = svc
+
+
 def start_deadline_watchdog(stop_event):
     """상한을 넘긴 태스크의 chromedriver 를 강제로 끊는 감시 스레드를 띄운다.
 
@@ -1474,15 +1551,31 @@ def start_deadline_watchdog(stop_event):
                 if el <= limit or info.get("killed"):
                     continue
                 d = info.get("driver")
+                svc = info.get("service")
+                # ⚠ 끊을 대상이 없으면 killed 를 세우면 안 된다.
+                #   예전엔 driver 가 아직 None 인 상태(=Chrome 기동 중)에서도 killed 를 먼저 세우고
+                #   kill 을 시도했다 → AttributeError 로 실패한 뒤 플래그 때문에 재시도조차 안 해
+                #   그 워커가 영구히 잡혔다 (2026-08-03: 마지막 1건이 76분 정지).
+                #   지금은 대상이 생길 때까지 매 주기 다시 본다(로그는 간격을 두고만 출력).
+                if d is None and getattr(svc, "process", None) is None:
+                    if now - info.get("warn_ts", 0) >= MISSING_TARGET_WARN_INTERVAL:
+                        info["warn_ts"] = now
+                        print(f"  ⏰ 데드라인 초과 {el:.0f}초 > {limit}초 인데 끊을 드라이버가 아직 없음"
+                              f"(Chrome 기동 중) → 다음 주기 재시도: {info['device']} {info['url']}")
+                    continue
                 print(f"  ⏰ 데드라인 초과 {el:.0f}초 > {limit}초 → 드라이버 강제 종료: "
                       f"{info['device']} {info['url']}")
                 info["killed"] = True
                 try:
                     # quit() 은 응답을 기다리므로 물린 상태에선 같이 멈춘다 → 프로세스를 직접 죽인다
-                    d.service.process.kill()
+                    if d is not None:
+                        d.service.process.kill()
+                    else:
+                        svc.process.kill()    # 기동 중(driver 미생성) — Service 프로세스를 직접 끊는다
                 except Exception:
                     try:
-                        d.quit()
+                        if d is not None:
+                            d.quit()
                     except Exception:
                         pass
 
