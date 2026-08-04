@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_260803_v3.7.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_260804_v3.8.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 PNG·MHTML을 파일명의 첫 `_PC`/`_MO` 토큰 **앞부분** 기준으로 하위 폴더 정리 (위 캡처 파일명 규칙에선 사이트코드가 됨). `PC`/`MO` 토큰이 없는 파일은 건너뜀 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_260803_v3.7.py
+python page_capture_260804_v3.8.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_260803_v3.7.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260803_v3.7.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_260804_v3.8.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260803_v3.7.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_260804_v3.8.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. 캡처물 정리
@@ -162,6 +162,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.5 | 2026-07-24 | **산출물 축소**: 폴더에 `_daily_report.xlsx` 하나만 남긴다. `LOG_TO_FILE` 기본 OFF(`_run_latest.log` 미생성) / `WRITE_SKIPPED_TXT=False`(`_skipped_*.txt` 미생성, 개수는 콘솔) / `KEEP_RESULT_CSV=False`(`_result_latest.csv` 는 리포트 입력으로 실행 중엔 유지하다 완주 후 삭제). 셋 다 켜면 종전 동작. 크래시 시엔 CSV 가 남아 사후 추적 가능 |
 | v3.6 | 2026-07-28 | **리포트 유실 방지**: `_daily_report.xlsx` 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 `wb.save(최종경로)` 에 들어가 `styles.xml`/`workbook.xml`/`[Content_Types].xml` 을 못 쓴 채 끝났고, `ZipFile.__del__` 이 그 반쪽짜리를 닫아 Excel 이 거부했다 — 날아간 건 오늘치가 아니라 **누적 이력 전체**. 저장을 임시파일 → 필수 파트 검증 → `os.replace` 로 바꿔 실패해도 원본이 남고, 기존 파일이 손상돼 있으면 `.broken_<ts>` 로 격리 후 새로 시작한다. 저장 전 여유공간도 확인(`DAILY_REPORT_MIN_FREE_MB`, 기본 200MB) |
 | v3.7 | 2026-08-03 | **기동 hang 방지**: 워커가 Chrome 을 띄우는 도중 물리면 데드라인 감시가 이를 끊지 못해 그 워커가 영구히 잡혔다(실제로 마지막 1건이 76분간 정지, 리포트엔 빈칸으로 남음). 원인은 두 가지 — 감시가 끊을 대상이 없는데도 `killed` 플래그를 먼저 세워 다음 주기 재시도까지 막았고, 감시 등록이 `get_driver()` **반환 후**라 기동 구간 자체가 사각지대였다. 이제 ① 대상이 없으면 플래그를 세우지 않고 다음 주기에 다시 본다(로그는 `MISSING_TARGET_WARN_INTERVAL` 간격) ② `Service` 객체를 먼저 감시에 등록하고 `webdriver.Chrome(service=svc)` 로 넘겨 세션 생성 중 hang 도 `svc.process.kill()` 로 끊는다 ③ 재사용 driver 는 `get_driver()` 진입 시점에 등록해 헬스체크·quit 구간까지 감시 ④ `DRIVER_START_TIMEOUT`(기본 120초) 보조 그물 — 초과 시 `timeout` 으로 확정하고 다음 URL 로 넘어간다(`detail` 이 `driver_start_timeout:` 으로 시작해 페이지 타임아웃과 구분) ⑤ `CHROMEDRIVER_EXE` 를 채우면 Selenium Manager 의 드라이버 경로 해석 단계를 건너뛴다(비우면 종전과 동일) |
+| v3.8 | 2026-08-04 | **부분 실행 보호**: URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 `(미실행)` 으로 덮였다(운영에서 998행 소실). 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 `(미실행)` 으로 써넣은 탓이다. 이제 `write_daily_report(target_urls=...)` 로 이번 실행 대상을 넘기고, **그 밖의 URL 행은 손대지 않는다**(`DAILY_REPORT_PRESERVE_UNTARGETED`, 기본 True — False 로 두면 예전처럼 전부 덮어쓴다). 대상이었는데 결과가 없는 URL 은 종전대로 `(미실행)` 이라 "돌다 죽어서 못 돈 건"은 계속 드러난다. 이슈 문구는 의미가 뒤집혀 있던 `오늘 대상 아님` → `미실행` 으로 바꿨고, 부분 실행이면 완주 직전 콘솔에 경고 1줄을 찍는다 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 

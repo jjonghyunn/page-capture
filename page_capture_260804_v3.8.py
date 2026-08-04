@@ -1,4 +1,4 @@
-# page_capture_260803_v3.7.py
+# page_capture_260804_v3.8.py
 # 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
 # 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
 # 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
@@ -32,6 +32,7 @@
 # 2026-07-24  Jonghyun Park w/ Claude  — v3.5 [산출물 축소] 폴더에 _daily_report.xlsx 하나만 남긴다: LOG_TO_FILE 기본 OFF(_run_latest.log 미생성) / WRITE_SKIPPED_TXT=False(_skipped_*.txt 미생성, 개수는 콘솔로) / KEEP_RESULT_CSV=False(_result_latest.csv 는 실행 중엔 리포트 입력으로 유지하다 완주 후 삭제). 크래시 시엔 CSV 가 남아 사후 추적 가능
 # 2026-07-28  Jonghyun Park w/ Claude  — v3.6 [리포트 유실 방지] 운영 중 _daily_report.xlsx 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 wb.save(최종경로) 에 들어가 styles.xml/workbook.xml/[Content_Types].xml 을 못 쓴 채 끝났고, ZipFile.__del__ 이 그 반쪽짜리를 닫아 Excel 이 거부 — 날아간 건 오늘치가 아니라 누적 7일치였다(값은 inlineStr 라 sheet1.xml 에서 전량 복구). ① 저장을 임시파일 → 필수 파트 검증 → os.replace 로 바꿔 실패해도 원본이 남게 함 ② 기존 파일 손상으로 load_workbook 이 실패하면 .broken_<ts> 로 격리 후 새로 시작(매 실행 같은 자리에서 죽던 것 방지) ③ 저장 전 여유공간 검사(DAILY_REPORT_MIN_FREE_MB, 기본 200MB) — 부족하면 아예 손대지 않는다
 # 2026-08-03  Jonghyun Park w/ Claude  — v3.7 [기동 hang 방지] ① 감시 스레드가 끊을 대상(driver/service)이 없으면 killed 를 안 세우고 다음 주기에 재시도(예전엔 driver 가 None 인데 killed 를 먼저 세워 kill 실패 후 영구 정지 — 워커 1개가 76분 잡힌 사례) ② Service 객체를 먼저 감시에 등록하고 webdriver.Chrome(service=svc) 호출 — 세션 핸드셰이크 hang 을 svc.process.kill() 로 끊는다 ③ 재사용 driver 를 get_driver() 진입 시점에 등록(헬스체크·quit 구간도 감시) ④ DRIVER_START_TIMEOUT(기본 120초) 보조 그물 — 초과 시 TimeoutException 으로 result=timeout(detail 'driver_start_timeout:') ⑤ CHROMEDRIVER_EXE 상수 — 비우면 종전대로 Selenium Manager, 값을 넣으면 경로 고정으로 해석 단계 생략
+# 2026-08-04  Jonghyun Park w/ Claude  — v3.8 [부분 실행 보호] URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 (미실행) 로 덮이던 문제. 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 (미실행) 로 써넣었다(운영에서 998행 소실). ① write_daily_report 에 target_urls 인자 추가 — 그 밖의 URL 행은 손대지 않고 기존 값을 보존(DAILY_REPORT_PRESERVE_UNTARGETED) ② 대상이었는데 결과가 없는 URL 은 종전대로 (미실행) — 도중에 죽어서 못 돈 건은 계속 보인다 ③ 이슈 문구 '오늘 대상 아님' → '미실행'(의미가 뒤집혀 있었다) ④ 부분 실행이면 완주 직전 콘솔 경고 1줄(_count_report_urls)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -225,6 +226,10 @@ DAILY_REPORT_COLS = 3
 # 리포트를 저장하기 전에 최소 이만큼(MB) 여유공간이 있어야 한다. 부족하면 저장을 아예 건너뛴다.
 # 0 이면 검사 안 함. (2026-07-28: 디스크가 꽉 찬 상태에서 저장이 중간에 끊겨 리포트가 깨졌다)
 DAILY_REPORT_MIN_FREE_MB = 200
+# 이번 실행 대상이 아닌 URL 의 기존 리포트 값을 보존할지.
+# False 로 두면 URL 몇 개만 골라 재실행했을 때 그 날짜 블록의 나머지가 (미실행) 로 덮인다
+# (같은 날짜는 열을 새로 만들지 않고 그 자리를 재사용하기 때문 — 2026-08-04 실제 사고).
+DAILY_REPORT_PRESERVE_UNTARGETED = True
 # 결과 CSV 파일명 — 실행 중 건별로 append 되는 안전망. 날짜별로 쌓지 않고 매 실행 덮어쓴다.
 # (이력은 일일 리포트가 갖는다)
 # ⚠ 이 CSV 는 write_daily_report 의 입력 원본이라 실행 중에는 반드시 필요하다(메모리 rows 가
@@ -290,8 +295,7 @@ MOBILE_UA = ('Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit
 # 캡처할 URL 목록 (한 줄에 하나, # 로 시작하면 주석 처리)
 # https:// 필수 작성 필요
 URLS = """
-https://www.example.com/nz/offer/campaign-name-gift-ideas
-https://www.example.com/vn/offer/campaign-name
+https://www.example.com/nz/offer/campaign-name
 """
 # ═══════════════════════════════════════════
 
@@ -1274,12 +1278,42 @@ def capture_page(url, device_type):
 # =========================
 # 일일 리포트 (최신이 항상 왼쪽)
 # =========================
-def write_daily_report(csv_path, run_date, quiet=False):
+def _count_report_urls():
+    """리포트에 이미 등록돼 있는 URL 행 수. 부분 실행 판정에만 쓴다(실패해도 0)."""
+    if not DAILY_REPORT:
+        return 0
+    path = f"{OUTPUT_DIR}/{DAILY_REPORT_NAME}"
+    if not os.path.exists(path):
+        return 0
+    wb = None
+    try:
+        from openpyxl import load_workbook
+        # ⚠ read_only 는 파일 핸들을 계속 물고 있어 반드시 close 해야 한다.
+        #   안 닫으면 바로 뒤 write_daily_report 의 os.replace 가 PermissionError 로 죽는다.
+        wb = load_workbook(path, read_only=True)
+        return sum(1 for row in wb.active.iter_rows(min_row=3, max_col=1, values_only=True)
+                   if row[0])
+    except Exception:
+        return 0
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+
+def write_daily_report(csv_path, run_date, quiet=False, target_urls=None):
     """날짜별 결과를 한 파일에 누적한다 — 최신 날짜가 B~D열, 과거는 오른쪽으로 밀린다.
 
     구조:  A열 = url,  이후 하루당 3열 = [{날짜} PC, {날짜} MO, {날짜} 이슈]
     같은 날 다시 돌리면 그 날짜 블록을 덮어쓴다(열이 중복으로 늘지 않는다).
     URL 은 어제까지 있던 것도 계속 남긴다 — "어제는 있었는데 오늘 아예 안 돈" 것을 보이게 하려고.
+
+    ⚠ target_urls = 이번 실행이 대상으로 삼은 URL 목록. 그 **밖의** URL 행은 손대지 않는다
+      (기존 값 보존). 안 그러면 URL 몇 개만 골라 재실행했을 때 같은 날짜 블록을 재사용하면서
+      나머지가 전부 (미실행) 로 밀린다 — 2026-08-04 에 실제로 그날 완주분 998행이 날아갔다.
+      대상이었는데 결과가 없는 URL 은 종전대로 (미실행) 로 찍어 "돌다 죽어서 못 돈 건"은 계속 보인다.
 
     ⚠ 입력이 메모리의 rows 가 아니라 **디스크의 result CSV** 인 것이 핵심이다(2026-07-23).
       하드 크래시로 프로세스가 죽으면 finally·atexit 이 안 돌아 메모리의 결과는 통째로 사라진다.
@@ -1329,6 +1363,13 @@ def write_daily_report(csv_path, run_date, quiet=False):
         if mo == "ok" and pc not in ("ok", "exists"):
             issues.append("PC 미저장")
         day_vals[u] = (pc, mo, " / ".join(issues))
+
+    # ── 이번 실행 대상 집합 — 이 밖의 URL 행은 기존 값을 보존한다(부분 재실행 보호)
+    # target_urls 를 안 주면 결과가 있는 URL 만 대상으로 봐서, 최소한 남의 값은 안 건드린다.
+    if DAILY_REPORT_PRESERVE_UNTARGETED:
+        targets = set(target_urls) if target_urls is not None else set(day_vals)
+    else:
+        targets = None                 # 예전 동작(시트의 모든 행을 덮어쓴다)
 
     # ── 저장할 공간이 없으면 아예 손대지 않는다 ──────────────────────────
     # 디스크가 꽉 찬 상태로 save 에 들어가면 파일을 절반만 쓰고 죽어서, 여태 쌓인 이력을
@@ -1399,7 +1440,13 @@ def write_daily_report(csv_path, run_date, quiet=False):
     fill_bad = PatternFill("solid", fgColor="FFC7CE")     # 문제 있는 칸
     fill_ok = PatternFill("solid", fgColor="E2EFDA")      # 저장된 칸
     for u, r in row_of.items():
-        pc, mo, issue = day_vals.get(u, ("(미실행)", "(미실행)", "오늘 대상 아님"))
+        if u in day_vals:
+            pc, mo, issue = day_vals[u]
+        elif targets is not None and u not in targets:
+            continue                   # 이번 실행 대상이 아니다 — 기존 칸을 그대로 둔다
+        else:
+            # 대상이었는데 결과가 없다 = 아직 안 돌았거나 도중에 죽었다
+            pc, mo, issue = ("(미실행)", "(미실행)", "미실행")
         for off, val in enumerate((pc, mo, issue)):
             c = ws.cell(row=r, column=base + off, value=val)
             if off < 2:
@@ -1407,7 +1454,7 @@ def write_daily_report(csv_path, run_date, quiet=False):
                     c.fill = fill_ok
                 elif val not in ("error_page", ""):
                     c.fill = fill_bad
-            elif val and val != "오늘 대상 아님":
+            elif val and val != "미실행":
                 c.fill = fill_bad
 
     # ── 보기 설정
@@ -1672,7 +1719,8 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             # 중간 저장 — 프로세스가 죽어도 여기까지는 리포트에 남는다 (조용히)
             if REPORT_FLUSH_EVERY and progress["n"] % REPORT_FLUSH_EVERY == 0:
                 try:
-                    write_daily_report(csv_path, ts.split("_")[0], quiet=True)
+                    write_daily_report(csv_path, ts.split("_")[0], quiet=True,
+                                       target_urls=urls)
                 except Exception as e:
                     print(f"  ⚠️ 리포트 중간 저장 실패(계속 진행): {e}")
         return info
@@ -1752,7 +1800,14 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             print(f"{label} {len(urls_list)}개")
 
     # ── 일일 리포트 (최신 날짜가 항상 B~D열) ──────────────────
-    write_daily_report(csv_path, ts.split("_")[0])
+    # 리포트에 이미 등록된 URL 보다 이번 대상이 적으면 부분 실행이다. 조용히 반쪽만 갱신되면
+    # "나머지가 왜 (미실행) 이지?" 로 헷갈리므로(2026-08-04), 보존한다는 사실을 눈에 띄게 알린다.
+    _n_known = _count_report_urls()
+    if _n_known > len(urls):
+        _keep = "보존한다" if DAILY_REPORT_PRESERVE_UNTARGETED else "(미실행) 로 덮는다"
+        print(f"⚠️ 부분 실행(대상 {len(urls)}개 / 리포트 등록 {_n_known}개) — "
+              f"나머지 URL 의 {ts.split('_')[0]} 값은 {_keep}")
+    write_daily_report(csv_path, ts.split("_")[0], target_urls=urls)
 
     # ── 완주했으니 결과 CSV 를 치운다(폴더엔 _daily_report.xlsx 만 남긴다) ──
     # 리포트 갱신을 마친 뒤이므로 이력은 리포트가 이미 갖고 있다. 크래시 시엔 여기 못 와서 CSV 가 남는다.
