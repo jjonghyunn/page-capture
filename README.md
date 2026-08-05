@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-07-30  Jonghyun Park w/ Claude</sub>  
+<sub>2026-08-04  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -137,7 +137,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v2.5 | 2026-07-06 | `is_error_page` 오탐 수정 (정상 페이지가 error로 skip 되던 문제) |
 | v2.6 | 2026-07-08 | perf log로 메인 문서 HTTP status 감지 추가 (비영어 404가 `is_error_page`를 빠져나가 캡처되던 문제) |
 | v2.7 | 2026-07-10 | perf log 활성화 후 `--headless=new` 가 빈 창을 띄우는 문제 → `--window-position` 으로 창을 화면 밖으로 이동 |
-| v2.8 | 2026-07-10 | PC 캡처 분기의 미정의 호출 `is_sec_path` → `is_hq_path` 로 수정 (매 PC 캡처가 `NameError` 로 skip 되던 문제) + `OUTPUT_DIR` 기본값 `captures` 로 정리 |
+| v2.8 | 2026-07-10 | PC 캡처 분기의 미정의 함수 호출을 `is_hq_path` 로 수정 (매 PC 캡처가 `NameError` 로 skip 되던 문제) + `OUTPUT_DIR` 기본값 `captures` 로 정리 |
 | v2.9 | 2026-07-14 | unknown(soft-404) 페이지 skip 추가 — 메인 도메인이 존재하지 않는 경로에 HTTP 200 + 홈 fallback 을 줄 때 `<meta property="og:url">` 이 비었거나 없음을 `is_unknown_page` 로 감지해 skip (리다이렉트/HTTP status/error 마커로 안 잡히던 케이스) + `skipped_unknown_page_{ts}.txt` 기록 |
 | v3.0 | 2026-07-20 | **버그**: 출력 폴더 생성을 캡처 시작 전으로 이동(폴더가 없으면 저장이 전량 실패), URL 주석 필터를 `strip()` 후 판정(들여쓴 `#` 줄이 URL 로 유입), Chrome 생성을 `try` 안으로(기동 실패 시 결과 집계에서 누락), `except:` → `except Exception:`(Ctrl+C 중단 가능), page load/script timeout 추가 |
 | v3.0 | 2026-07-20 | **결과기록**: `(url, device)` 단위 `result_{ts}.csv` 추가 — 디바이스별 skip 사유·최종 URL·HTTP status·소요시간 기록 |
