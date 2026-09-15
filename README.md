@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-08-04  Jonghyun Park w/ Claude</sub>  
+<sub>2026-09-15  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 PNG 및 MHTML로 저장합니다.
@@ -165,6 +165,36 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.8 | 2026-08-04 | **부분 실행 보호**: URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 `(미실행)` 으로 덮였다(운영에서 998행 소실). 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 `(미실행)` 으로 써넣은 탓이다. 이제 `write_daily_report(target_urls=...)` 로 이번 실행 대상을 넘기고, **그 밖의 URL 행은 손대지 않는다**(`DAILY_REPORT_PRESERVE_UNTARGETED`, 기본 True — False 로 두면 예전처럼 전부 덮어쓴다). 대상이었는데 결과가 없는 URL 은 종전대로 `(미실행)` 이라 "돌다 죽어서 못 돈 건"은 계속 드러난다. 이슈 문구는 의미가 뒤집혀 있던 `오늘 대상 아님` → `미실행` 으로 바꿨고, 부분 실행이면 완주 직전 콘솔에 경고 1줄을 찍는다 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
+
+## 릴리스 / 태그
+
+버전마다 GitHub Release 가 있습니다 → [Releases](../../releases)
+
+| 항목 | 규칙 |
+|---|---|
+| 태그 형식 | `vN.N` (파일명 `_vN.N` 과 같은 숫자) |
+| 태그 지점 | 그 버전 파일을 **마지막으로 수정한 커밋** (다음 버전으로 rename 되기 직전) |
+| 노트 원천 | 메인 스크립트 **상단 헤더 changelog** |
+
+### 새 버전 릴리스하는 법
+
+1. 코드 수정 + 파일 rename (`page_capture_YYMMDD_vN.N.py`)
+2. **헤더 changelog 에 새 버전 줄 추가** — 이게 릴리스 노트가 되므로 먼저 써야 합니다
+3. 커밋 후 태그 push:
+   ```bash
+   git tag -a v3.9 -m "page_capture v3.9" && git push origin v3.9
+   ```
+4. `.github/workflows/release.yml` 이 헤더에서 노트를 뽑아 릴리스를 자동 생성합니다
+
+노트를 미리 보려면 Actions 탭에서 **Release** 워크플로를 `workflow_dispatch` 로 실행하세요
+(릴리스는 만들지 않고 노트만 출력합니다). 로컬에서도 확인할 수 있습니다:
+
+```bash
+python .github/make_release_notes.py v3.9
+```
+
+> 커밋 메시지 기반 자동 노트(`--generate-notes`)는 쓰지 않습니다 — 커밋 제목이 그대로
+> 공개 릴리스 노트로 재발행되기 때문입니다. 노트 원천은 헤더 changelog 하나로 고정입니다.
 
 ## License
 
