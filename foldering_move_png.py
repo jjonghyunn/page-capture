@@ -1,5 +1,6 @@
 # foldering_move_png.py
 # 2026-05-27  Jonghyun Park w/ Claude
+# 2026-10-06  Jonghyun Park w/ Claude  — 메인 스크립트가 v3.9 부터 JPG 로 저장해 TARGET_EXTS 에 .jpg 추가 (이전 .png 도 계속 정리 대상)
 # 2026-07-30  Jonghyun Park w/ Claude  — .png 만 옮기던 것을 .mhtml 도 함께 옮기도록 수정.
 #   메인 스크립트의 이어하기(already_captured)는 sitecode 하위폴더에 PNG 와 MHTML 이 **둘 다**
 #   있어야 skip 하므로, PNG 만 옮기면 MHTML 이 루트에 남아 판정이 항상 False → 재실행이 전량
@@ -11,12 +12,13 @@ import shutil
 import re
 
 # ════ 사용자가 바꿔야 하는 부분 ════
-# 캡처 PNG / MHTML 이 들어있는 폴더 경로
+# 캡처 이미지(JPG/PNG) / MHTML 이 들어있는 폴더 경로
 FOLDER_PATH = r"C:\Users\user_name\Downloads\captures"
 
 # ════ 내부 사용 ════
-# 정리 대상 확장자 — 메인 스크립트가 (url, device) 당 PNG + MHTML 을 한 쌍으로 저장한다.
-TARGET_EXTS = (".png", ".mhtml")
+# 정리 대상 확장자 — 메인 스크립트가 (url, device) 당 이미지 + MHTML 을 한 쌍으로 저장한다.
+# v3.9 부터 이미지는 .jpg (이전 캡처의 .png 도 계속 정리 대상)
+TARGET_EXTS = (".jpg", ".png", ".mhtml")
 
 # 파일 리스트 가져오기
 file_list = [f for f in os.listdir(FOLDER_PATH) if f.endswith(TARGET_EXTS)]

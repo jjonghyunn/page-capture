@@ -1,38 +1,7 @@
-# page_capture_260804_v3.8.py
-# 2026-04-17  Jonghyun Park w/ Claude  — v2.0 초기 버전
-# 2026-04-20  Jonghyun Park w/ Claude  — v2.1 is_error_page 다국어 에러 감지 강화 + /common/404/ + Chrome ERR 감지
-# 2026-04-29  Jonghyun Park w/ Claude  — v2.2 filename에 OUTPUT_DIR 변수 사용 + raw string 적용 + 파일명 정리(두 번째 날짜=캠페인 날짜 제거)
-# 2026-05-22  Jonghyun Park w/ Claude  — v2.3 주석/예시 URL sanitize + 도메인 매칭 로직 상수화 (TARGET_DOMAIN / TARGET_DOMAIN_CN / TARGET_BRAND_KEYWORD) + 설정 상수 파일 상단으로 이동
-# 2026-06-18  Jonghyun Park w/ Claude  — v2.4 캡처를 ThreadPoolExecutor 로 병렬화 (MAX_WORKERS) + URL 목록 상단 상수(URLS)로 이동
-# 2026-06-19  Jonghyun Park w/ Claude  — v2.4 MAX_WORKERS 사양별 권장값 주석 보강
-# 2026-07-06  Jonghyun Park w/ Claude  — v2.5 is_error_page 오탐 수정: aiscPrivateError 는 is_displayed 로, ERR_ 문자열은 title 빈 경우로 한정 (정상 페이지가 error_page 로 skip 되던 문제)
-# 2026-07-08  Jonghyun Park w/ Claude  — v2.6 perf log 로 메인 문서 HTTP status 감지 추가 (비영어 404 가 is_error_page 를 빠져나가 캡처되던 문제)
-# 2026-07-10  Jonghyun Park w/ Claude  — v2.7 perf log 활성화 후 --headless=new 가 빈 흰 창을 띄우는 문제 → --window-position 으로 창을 화면 밖으로 이동
-# 2026-07-10  Jonghyun Park w/ Claude  — v2.8 PC 캡처 분기의 미정의 호출 is_sec_path → is_hq_path 로 수정(매 PC 캡처 NameError 로 skip 되던 문제) + OUTPUT_DIR 기본값을 captures 로 정리
-# 2026-07-14  Jonghyun Park w/ Claude  — v2.9 unknown(soft-404) 페이지 skip 추가: 메인 도메인이 존재하지 않는 경로에 HTTP 200 + 홈 fallback 을 주는 경우 <meta property="og:url"> 이 비었거나(EMPTY) 아예 없음(MISSING) → is_unknown_page 로 감지해 skip (리다이렉트/HTTP status/기존 error 마커로 안 잡히던 200 케이스)
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [버그] ① 출력 폴더 생성을 캡처 시작 전으로 이동(폴더가 없으면 PNG/MHTML 저장이 전량 실패하던 문제) ② URL 주석 필터를 strip 후 판정(들여쓴 '#' 줄이 URL 로 유입) ③ Chrome 생성을 try 안으로(기동 실패 시 결과 집계에서 통째로 누락) ④ bare except → except Exception (Ctrl+C 중단 가능) ⑤ page load/script timeout 추가(멈춘 서버가 워커를 무한 점유하는 것 방지)
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [결과기록] 결과를 (url, device) 단위 result_*.csv 로 기록 — 기존 txt 3종은 URL 단위라 'PC 는 정상인데 MO 만 실패' 를 구분 못 했고 error/timeout 은 어디에도 안 남아 재실행 대상 파악이 불가능했다
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [로그인화면 skip] 쿠키·팝업 처리 중 JS 로 늦게 로그인 페이지로 이동하는 경우 리다이렉트 판정(get 직후 1회)을 빠져나가 로그인 화면이 캡처물로 저장됐다 → 저장 직전 URL 재확인 + SKIP_URL_KEYWORDS (RECHECK_URL_BEFORE_SAVE)
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [속도] 워커별 Chrome 재사용(REUSE_DRIVER) + 이어하기(SKIP_IF_EXISTS: 같은 날 PNG+MHTML 이 있으면 건너뜀) + 일시적 실패만 재시도(RETRY_COUNT) + MHTML 크기 검증(mhtml_failed)
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [리다이렉트 정규화] 후행 슬래시만 무시하던 비교를 #fragment·추적파라미터(utm_*/gclid)·www·대소문자·기본포트·http↔https·퍼센트인코딩·쿼리순서까지 무시하도록 변경 (정상 페이지가 리다이렉트로 오탐돼 skip 되던 문제)
-# 2026-07-20  Jonghyun Park w/ Claude  — v3.0 [CDP 전체캡처] Page.captureScreenshot(captureBeyondViewport) 경로를 추가했으나 스크롤로 띄운 지연 로딩 이미지가 렌더되기 전에 찍혀 이미지가 빠진 캡처가 나옴 → 기본 OFF(USE_CDP_FULLPAGE=False), 이미지 로딩 완료 대기를 넣기 전까지 켜지 말 것
-# 2026-07-21  Jonghyun Park w/ Claude  — v3.1 SKIP_URL_KEYWORDS 에 /registration 추가 — 메일 인증 게이트 페이지가 URL 에 /login 이 없어 로그인 skip 을 통과해 캡처물로 저장되던 문제
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [MO 스티칭 재작성] 겹침 보정이 CSS px 값을 device px 자리에 써서 이음새마다 내용이 중복되고 캔버스가 커진 만큼 하단이 검정으로 남던 버그를 고쳤다(실측 75,492px 페이지에서 중복·검정 약 12%). 이제 각 컷을 "실제 스크롤 위치 × 배율" 자리에 그대로 붙인다 + NEUTRALIZE_STICKY(스티칭 동안 position:fixed/sticky 를 static 으로, 저장 전 원복) + 결과 픽셀에서 스티키 바 높이를 직접 재서 잘라내는 _sticky_band + MOBILE_STITCH_OVERLAP / MOBILE_MAX_SHOTS 상수화
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [타임아웃] ① PAGE_LOAD_TIMEOUT 60 → 120 (무거운 페이지는 단독 실행에서도 90초를 넘겨 60초에 걸려 통째로 누락됐다) ② CDP_TIMEOUT 신설 — set_page_load_timeout/set_script_timeout 은 CDP 에 적용되지 않아 Page.captureSnapshot 이 무응답이면 워커가 영구 대기하고 그 future 하나 때문에 결과 CSV 기록까지 막혔다(실제 4시간 점유 사고) → cdp_with_timeout 으로 감싸고 초과 시 그 건만 mhtml_failed 로 포기
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.2 [결과 CSV] 캡처 1건이 끝날 때마다 result_*.csv 에 append. 예전엔 전부 끝난 뒤 한 번에 써서, 중간에 멈추면 그날 판정 결과가 통째로 날아갔다. 완주하면 마지막에 입력 URL 순서로 정렬해 다시 쓴다
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [hang 원인 제거] driver.quit() 이 응답 없는 chromedriver 를 상대로 타임아웃 없는 HTTP 요청(send_remote_shutdown_command → is_connectable)을 걸어 영구 대기하던 문제 — 스택 덤프로 확인된 실제 hang 지점. 별도 스레드로 quit 하고 QUIT_TIMEOUT 초과 시 chromedriver 프로세스를 직접 종료
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [진단] 파일 로그(run_*.log)로 출력 미러링 + STACK_DUMP_INTERVAL 마다 전체 스레드 스택 덤프. 스케줄러가 pythonw 로 돌리면 콘솔 출력이 버려져 hang 원인 추적이 불가능했다 (이 로그가 위 원인을 하루 만에 특정했다)
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [신뢰성] ① 태스크 하드 데드라인(TASK_DEADLINE_MO/PC) — 감시 스레드가 상한 초과 워커의 드라이버를 끊어 전체 실행이 물리는 것을 막는다 ② 시작 시 이전 실행 잔재(headless chrome/chromedriver) 정리 — 강제 종료 시 Chrome 이 남아 메모리를 물고 있었다
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [속도] HTTP 사전 필터(PREFILTER_HTTP) — 404/5xx 는 브라우저 없이 확정. 실측상 워커시간의 58%가 죽은 URL 확인에 쓰였고 대상 URL 의 84%가 PC·MO 양쪽 死였다. 403 은 봇 차단일 수 있어 제외, soft-404 는 기존 og:url 검사가 계속 담당
-# 2026-07-22  Jonghyun Park w/ Claude  — v3.3 [산출물] 일일 리포트 daily_report.xlsx — 최신 날짜가 항상 B~D열(PC/MO/이슈)이고 과거 날짜는 오른쪽으로 밀린다. 같은 날 재실행은 덮어쓰기 + MO 하단 흰 여백 트림(TRIM_TRAILING_BLANK)
-# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [크래시] STACK_DUMP_INTERVAL 기본 OFF. 이 기능을 켠 뒤 access violation(0xC0000005) 이 2회 발생했고 둘 다 "덤프 출력 도중"이었다. 하드 크래시는 finally 도 안 돌아, 전체 태스크의 절반쯤에서 죽으면 큐 뒤쪽이 통째로 결번되고 산출물(리포트·skip txt)도 하나도 안 남는다 — 실제로 하루치 캡처의 27%가 그렇게 빠졌다
-# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [산출물] 날짜별 result CSV·run 로그 누적을 폐지하고 고정명·언더바 접두로 통일 — _daily_report.xlsx / _result_latest.csv / _run_latest.log / _skipped_*.txt (RESULT_CSV_NAME·RUN_LOG_NAME·SKIPPED_TXT_NAMES). 이력은 일일 리포트 한 파일이 갖고, 폴더 맨 위에 모여 보인다
-# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [리포트 내구성] write_daily_report 가 메모리 rows 대신 result CSV 를 읽도록 바꾸고 REPORT_FLUSH_EVERY(기본 50) 건마다 중간 저장. 예전엔 완주해야만 리포트가 생겨, 중간에 죽으면 "어디까지 됐는지" 조차 남지 않았다
-# 2026-07-23  Jonghyun Park w/ Claude  — v3.4 [이어하기] already_captured() 신설 — SKIP_IF_EXISTS 가 OUTPUT_DIR 루트만 보던 탓에, 캡처물을 sitecode 폴더로 옮기는 foldering 을 돌린 뒤에는 이어하기가 무력화돼 재실행이 전량 재캡처가 됐다. 이제 {OUTPUT_DIR}/{SITECODE}/ 도 함께 확인한다
-# 2026-07-24  Jonghyun Park w/ Claude  — v3.5 [산출물 축소] 폴더에 _daily_report.xlsx 하나만 남긴다: LOG_TO_FILE 기본 OFF(_run_latest.log 미생성) / WRITE_SKIPPED_TXT=False(_skipped_*.txt 미생성, 개수는 콘솔로) / KEEP_RESULT_CSV=False(_result_latest.csv 는 실행 중엔 리포트 입력으로 유지하다 완주 후 삭제). 크래시 시엔 CSV 가 남아 사후 추적 가능
-# 2026-07-28  Jonghyun Park w/ Claude  — v3.6 [리포트 유실 방지] 운영 중 _daily_report.xlsx 가 열리지 않게 깨졌다. 디스크가 꽉 찬 상태로 wb.save(최종경로) 에 들어가 styles.xml/workbook.xml/[Content_Types].xml 을 못 쓴 채 끝났고, ZipFile.__del__ 이 그 반쪽짜리를 닫아 Excel 이 거부 — 날아간 건 오늘치가 아니라 누적 7일치였다(값은 inlineStr 라 sheet1.xml 에서 전량 복구). ① 저장을 임시파일 → 필수 파트 검증 → os.replace 로 바꿔 실패해도 원본이 남게 함 ② 기존 파일 손상으로 load_workbook 이 실패하면 .broken_<ts> 로 격리 후 새로 시작(매 실행 같은 자리에서 죽던 것 방지) ③ 저장 전 여유공간 검사(DAILY_REPORT_MIN_FREE_MB, 기본 200MB) — 부족하면 아예 손대지 않는다
-# 2026-08-03  Jonghyun Park w/ Claude  — v3.7 [기동 hang 방지] ① 감시 스레드가 끊을 대상(driver/service)이 없으면 killed 를 안 세우고 다음 주기에 재시도(예전엔 driver 가 None 인데 killed 를 먼저 세워 kill 실패 후 영구 정지 — 워커 1개가 76분 잡힌 사례) ② Service 객체를 먼저 감시에 등록하고 webdriver.Chrome(service=svc) 호출 — 세션 핸드셰이크 hang 을 svc.process.kill() 로 끊는다 ③ 재사용 driver 를 get_driver() 진입 시점에 등록(헬스체크·quit 구간도 감시) ④ DRIVER_START_TIMEOUT(기본 120초) 보조 그물 — 초과 시 TimeoutException 으로 result=timeout(detail 'driver_start_timeout:') ⑤ CHROMEDRIVER_EXE 상수 — 비우면 종전대로 Selenium Manager, 값을 넣으면 경로 고정으로 해석 단계 생략
+# page_capture_261006_v3.9.py
+# 2026-10-06  Jonghyun Park w/ Claude  — v3.9 [저장 용량] 캡처를 PNG → JPG 로 저장하고 파일당 IMAGE_MAX_BYTES(기본 1MB) 이하가 되도록 품질(JPEG_QUALITY_STEPS) → 해상도(JPEG_SCALE_STEPS) 순으로 낮춘다(save_image_limited). PNG 는 평균 3.4MB·최대 28MB 라 한 캠페인 아카이브가 PNG 만 44GB 까지 쌓였다. JPEG 규격 한계(65500px)를 넘는 MO 스티칭은 먼저 그 안으로 축소한다. 확장자는 IMAGE_EXT 로 바꿀 수 있고 MHTML 은 그대로
 # 2026-08-04  Jonghyun Park w/ Claude  — v3.8 [부분 실행 보호] URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 (미실행) 로 덮이던 문제. 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 (미실행) 로 써넣었다(운영에서 998행 소실). ① write_daily_report 에 target_urls 인자 추가 — 그 밖의 URL 행은 손대지 않고 기존 값을 보존(DAILY_REPORT_PRESERVE_UNTARGETED) ② 대상이었는데 결과가 없는 URL 은 종전대로 (미실행) — 도중에 죽어서 못 돈 건은 계속 보인다 ③ 이슈 문구 '오늘 대상 아님' → '미실행'(의미가 뒤집혀 있었다) ④ 부분 실행이면 완주 직전 콘솔 경고 1줄(_count_report_urls)
+# (이전 버전 이력은 git history / GitHub Releases 참조 — 헤더에는 최근 2개 항목만 남긴다)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
 # 저장된 .mhtml 을 텍스트 에디터(메모장 등)로 열면 맨 위 MIME 헤더 2번째 줄
@@ -140,7 +109,7 @@ IGNORE_WWW_IN_COMPARE = True
 # 워커(스레드)마다 Chrome 을 1개만 띄우고 URL 이 바뀌어도 재사용한다.
 # 끄면 예전처럼 (url, device) 마다 새로 기동 — 기동에만 건당 3~10초가 든다.
 REUSE_DRIVER = True
-# 이미 같은 이름의 PNG+MHTML 이 있으면 건너뛴다 (중단 후 이어하기).
+# 이미 같은 이름의 이미지(JPG)+MHTML 이 있으면 건너뛴다 (중단 후 이어하기).
 # 파일명에 날짜(%m%d)가 들어가므로 "같은 날 재실행분만" 건너뛴다.
 SKIP_IF_EXISTS = True
 # 캡처 실패(timeout/error) 시 재시도 횟수. 404·리다이렉트 등 판정 결과는 재시도하지 않는다.
@@ -154,6 +123,17 @@ RETRY_COUNT = 1
 USE_CDP_FULLPAGE = False
 # CDP 캡처 최대 높이(px). 너무 긴 페이지는 Chrome 렌더 한계·메모리 문제로 잘라낸다.
 MAX_CAPTURE_HEIGHT = 30000
+
+# ── 이미지 저장 용량 ─────────────────────────────────────
+# 캡처는 JPG 로 저장하고, 파일 하나가 IMAGE_MAX_BYTES 를 넘으면
+# 품질(JPEG_QUALITY_STEPS) → 해상도(JPEG_SCALE_STEPS) 순으로 낮춰 다시 인코딩한다.
+# 끝까지 못 맞추면 가장 작은 결과를 저장하고 경고만 찍는다(캡처 자체는 버리지 않는다).
+IMAGE_EXT = ".jpg"
+IMAGE_MAX_BYTES = 1_000_000
+JPEG_QUALITY_STEPS = (85, 75, 65)
+JPEG_SCALE_STEPS = (1.0, 0.85, 0.7, 0.55, 0.4)
+# JPEG 는 가로·세로 각각 65500px 가 상한 — 이보다 긴 MO 스티칭(예: 1170x69492)은 먼저 이 안으로 줄인다
+JPEG_MAX_DIM = 65500
 # MHTML 최소 크기(byte). 이보다 작으면 저장 실패로 보고 result=mhtml_failed 로 남긴다.
 MIN_MHTML_BYTES = 20000
 
@@ -659,6 +639,40 @@ def is_unknown_page(driver, url) -> bool:
 # =========================
 def screenshot_png(driver): return driver.get_screenshot_as_png()
 
+def _encode_jpeg(img, quality):
+    buf = io.BytesIO()
+    try:
+        img.save(buf, "JPEG", quality=quality, optimize=True)
+    except OSError:
+        # 아주 큰 이미지는 optimize 버퍼에서 실패할 수 있다 → optimize 없이 재시도
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=quality)
+    return buf.getvalue()
+
+def save_image_limited(img, path):
+    """img(PIL) 를 JPG 로 path 에 저장. IMAGE_MAX_BYTES 이하가 될 때까지 품질 → 해상도 순으로 낮춘다.
+    반환: (저장 bytes, quality, scale)"""
+    img = img.convert("RGB")
+    base = min(1.0, JPEG_MAX_DIM / max(img.width, img.height))
+    best = None
+    for s in JPEG_SCALE_STEPS:
+        scale = base * s
+        im = img if scale >= 0.999 else img.resize(
+            (max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.LANCZOS)
+        for q in JPEG_QUALITY_STEPS:
+            data = _encode_jpeg(im, q)
+            if best is None or len(data) < len(best[0]):
+                best = (data, q, scale)
+            if len(data) <= IMAGE_MAX_BYTES:
+                with open(path, "wb") as f:
+                    f.write(data)
+                return len(data), q, scale
+    data, q, scale = best
+    print(f"  ⚠️ {IMAGE_MAX_BYTES/1e6:.1f}MB 이하로 못 줄임 → 최소 {len(data)/1e6:.2f}MB 로 저장 (q{q}, x{scale:.2f})")
+    with open(path, "wb") as f:
+        f.write(data)
+    return len(data), q, scale
+
 def cdp_with_timeout(driver, cmd, params=None, timeout=None):
     """CDP 명령을 별도 스레드에서 실행하고 제한 시간을 넘기면 TimeoutError 를 낸다.
 
@@ -1040,19 +1054,19 @@ def capture_fullpage_cdp(driver):
         return None
 
 def build_output_paths(url, device_type, timestamp):
-    """이 (url, device) 가 저장될 PNG/MHTML 경로. 브라우저 없이 계산 가능해야
+    """이 (url, device) 가 저장될 이미지(JPG)/MHTML 경로. 브라우저 없이 계산 가능해야
     resume(이미 있으면 skip) 판정을 기동 전에 할 수 있다."""
     sitecode, page_path, _ = get_page_info(url)
     parsed = urlparse(url)
     # 쿼리 파라미터 있는 경우 파일명에 포함
-    # (ex: ES_PC_offer_black-friday_page_category-tv-audio_1112.png / 없으면 ES_PC_offer_black-friday_page_1112.png)
+    # (ex: ES_PC_offer_campaign-name_page_category-tv-audio_1112.jpg / 없으면 ES_PC_offer_campaign-name_page_1112.jpg)
     query_part = parsed.query.replace('=', '-').replace('&', '_') if parsed.query else ''
     if query_part:
-        base = safe_filename(f'{sitecode}_{device_type}_{page_path}_page_{query_part}_{timestamp}.png')
+        base = safe_filename(f'{sitecode}_{device_type}_{page_path}_page_{query_part}_{timestamp}{IMAGE_EXT}')
     else:
-        base = safe_filename(f'{sitecode}_{device_type}_{page_path}_page_{timestamp}.png')
-    png = f"{OUTPUT_DIR}/{base}"
-    return png, png[:-4] + ".mhtml"
+        base = safe_filename(f'{sitecode}_{device_type}_{page_path}_page_{timestamp}{IMAGE_EXT}')
+    img_path = f"{OUTPUT_DIR}/{base}"
+    return img_path, os.path.splitext(img_path)[0] + ".mhtml"
 
 
 def already_captured(png_path, mhtml_path):
@@ -1208,7 +1222,7 @@ def capture_page(url, device_type):
                 # capture_full_page_mobile 이 스스로 끝까지 스크롤하며 찍으므로
                 # 여기서 smooth_scroll_desktop 을 또 돌리면 시간만 두 배로 든다.
                 img = capture_full_page_mobile(driver, vw)
-                img.save(filename, 'PNG', optimize=True)
+                nbytes, q, sc = save_image_limited(img, filename)
             else:
                 total_h = smooth_scroll_desktop(driver)
                 driver.set_window_size(vw, min(total_h + 200, MAX_CAPTURE_HEIGHT))
@@ -1225,9 +1239,8 @@ def capture_page(url, device_type):
                 png2 = capture_fullpage_cdp(driver) if USE_CDP_FULLPAGE else None
                 png = png2 if png2 is not None else screenshot_png(driver)
                 retry -= 1
-            with open(filename, "wb") as f:
-                f.write(png)
-        print(f"  ✅ 저장: {filename}")
+            nbytes, q, sc = save_image_limited(Image.open(io.BytesIO(png)), filename)
+        print(f"  ✅ 저장: {filename}  ({nbytes/1e6:.2f}MB, q{q}, x{sc:.2f})")
 
         # ── MHTML 저장 ────────────────────────────────────────
         # fallback 으로 창을 늘렸다면 원래 뷰포트로 복원 (그 상태로 CDP 호출 시 blank 발생)
