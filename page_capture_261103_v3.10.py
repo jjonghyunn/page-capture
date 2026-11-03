@@ -1,6 +1,6 @@
-# page_capture_261006_v3.9.py
+# page_capture_261103_v3.10.py
+# 2026-11-03  Jonghyun Park w/ Claude  — v3.10 [고아 Chrome 정리] 강제 종료 3곳(quit 무응답·데드라인 감시·기동 타임아웃)이 chromedriver 만 죽여 headless Chrome 이 고아로 남던 문제 → taskkill /T 로 트리째 종료(_kill_tree). 실행 중 고아 정리(sweep_orphans_during_run — 부모가 죽은 headless Chrome 과 Chrome 없이 남은 자기 chromedriver, ORPHAN_SWEEP_EVERY), 종료 시 자기 chromedriver 정리(kill_own_drivers — 시작 전 정리와 달리 다른 캡처 실행은 건드리지 않음), 연속 timeout 서킷 브레이커(ABORT_AFTER_CONSECUTIVE_TIMEOUTS → 남은 작업은 aborted 로 기록하고 종료). 실운영에서 고아 Chrome 5세트가 CPU 60% 를 잡고 chromedriver 15개가 쌓인 채 1시간 넘게 timeout 만 반복했다
 # 2026-10-06  Jonghyun Park w/ Claude  — v3.9 [저장 용량] 캡처를 PNG → JPG 로 저장하고 파일당 IMAGE_MAX_BYTES(기본 1MB) 이하가 되도록 품질(JPEG_QUALITY_STEPS) → 해상도(JPEG_SCALE_STEPS) 순으로 낮춘다(save_image_limited). PNG 는 평균 3.4MB·최대 28MB 라 한 캠페인 아카이브가 PNG 만 44GB 까지 쌓였다. JPEG 규격 한계(65500px)를 넘는 MO 스티칭은 먼저 그 안으로 축소한다. 확장자는 IMAGE_EXT 로 바꿀 수 있고 MHTML 은 그대로
-# 2026-08-04  Jonghyun Park w/ Claude  — v3.8 [부분 실행 보호] URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 (미실행) 로 덮이던 문제. 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 (미실행) 로 써넣었다(운영에서 998행 소실). ① write_daily_report 에 target_urls 인자 추가 — 그 밖의 URL 행은 손대지 않고 기존 값을 보존(DAILY_REPORT_PRESERVE_UNTARGETED) ② 대상이었는데 결과가 없는 URL 은 종전대로 (미실행) — 도중에 죽어서 못 돈 건은 계속 보인다 ③ 이슈 문구 '오늘 대상 아님' → '미실행'(의미가 뒤집혀 있었다) ④ 부분 실행이면 완주 직전 콘솔 경고 1줄(_count_report_urls)
 # (이전 버전 이력은 git history / GitHub Releases 참조 — 헤더에는 최근 2개 항목만 남긴다)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
@@ -181,6 +181,17 @@ DRIVER_START_TIMEOUT = 120
 # 데드라인을 넘겼는데 아직 끊을 대상(driver/service)이 없을 때 경고를 다시 찍는 간격(초).
 # 감시 주기(15초)마다 찍으면 로그가 폭주하므로 첫 1회 + 이 간격으로만 남긴다.
 MISSING_TARGET_WARN_INTERVAL = 60
+# 실행 "중" 고아 정리 주기 — 데드라인 감시 N주기(× DEADLINE_CHECK_INTERVAL 초)마다 1회. 0 이면 끔.
+# 대상은 ① 부모가 이미 죽은 headless Chrome(고아) ② 이 실행이 띄운 chromedriver 중 Chrome 자식 없이
+# ORPHAN_DRIVER_MIN_AGE 초를 넘긴 것(기동 실패 잔재). 정상 워커는 부모가 살아 있어 안 걸린다.
+# ⚠ "오래된 Chrome" 을 나이로 지우면 안 된다 — REUSE_DRIVER 라 정상 워커도 실행 내내 같은 Chrome 이다.
+#   (2026-11-03: 강제 종료가 chromedriver 만 죽여 Chrome 5세트가 고아로 남아 CPU 60% 점유,
+#    Chrome 없는 chromedriver 15개 누적 → 이후 1시간 넘게 전부 timeout)
+ORPHAN_SWEEP_EVERY = 4
+ORPHAN_DRIVER_MIN_AGE = DRIVER_START_TIMEOUT + 60
+# timeout 이 연속 N건 나오면 남은 작업을 aborted 로 기록하고 실행을 끝낸다. 0 이면 끔.
+# (사이트 차단·PC 과부하로 전부 timeout 인데 수백 건을 끝까지 헛도는 것 방지 — 2026-11-03)
+ABORT_AFTER_CONSECUTIVE_TIMEOUTS = 15
 
 # ── HTTP 사전 필터 ───────────────────────────────────────────
 # 브라우저를 띄우기 전에 URL 상태코드를 먼저 확인해, 확실히 죽은 것은 Chrome 없이 확정한다.
@@ -361,6 +372,78 @@ def sweep_stale_chrome():
             print(f"🧹 이전 실행 잔재 정리: chrome {chrome_n}개 / chromedriver {driver_n}개")
     except Exception as e:
         print(f"  ⚠️ 잔재 정리 건너뜀: {type(e).__name__}: {e}")
+
+
+def _kill_tree(pid):
+    """pid 와 그 자식 프로세스를 통째로 죽인다 (chromedriver → Chrome 까지).
+
+    ⚠ chromedriver 만 kill() 하면 Chrome 은 부모를 잃은 채 계속 돈다(고아). 그래서
+      반드시 chromedriver 가 "살아 있을 때" /T 로 트리째 내려야 한다.
+    """
+    if not pid:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=30)
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        pass
+
+
+# 실행 중 고아 정리 — {own} 자리에 이 파이썬 PID, {age} 자리에 chromedriver 최소 나이(초)가 들어간다.
+# ① 부모가 없는 headless/scoped_dir Chrome → 트리째 종료
+# ② 부모가 이 프로세스인 chromedriver 중 chrome 자식이 없고 {age}초 넘은 것 → 트리째 종료
+_ORPHAN_SWEEP_PS = (
+    "$all = Get-CimInstance Win32_Process; "
+    "$alive = @{{}}; $all | ForEach-Object {{ $alive[[int]$_.ProcessId] = $true }}; "
+    "$now = Get-Date; $n = 0; $m = 0; "
+    "$all | Where-Object {{ $_.Name -eq 'chrome.exe' -and "
+    "($_.CommandLine -match '--headless' -or $_.CommandLine -match 'Temp\\\\scoped_dir') -and "
+    "-not $alive[[int]$_.ParentProcessId] }} | ForEach-Object {{ "
+    "taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; $n++ }}; "
+    "$all | Where-Object {{ $_.Name -eq 'chromedriver.exe' -and $_.ParentProcessId -eq {own} -and "
+    "($now - $_.CreationDate).TotalSeconds -gt {age} }} | ForEach-Object {{ "
+    "$p = $_.ProcessId; "
+    "if (-not ($all | Where-Object {{ $_.ParentProcessId -eq $p -and $_.Name -eq 'chrome.exe' }})) {{ "
+    "taskkill /PID $p /T /F 2>$null | Out-Null; $m++ }} }}; "
+    "Write-Output \"$n $m\""
+)
+
+
+def sweep_orphans_during_run():
+    """실행 중에 고아 Chrome / 기동 실패 chromedriver 를 치운다 (정상 워커는 건드리지 않음)."""
+    if os.name != "nt":
+        return
+    try:
+        ps = _ORPHAN_SWEEP_PS.format(own=os.getpid(), age=int(ORPHAN_DRIVER_MIN_AGE))
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+        chrome_n, driver_n = (int(x) for x in out.split()[:2])
+        if chrome_n or driver_n:
+            print(f"  🧹 실행 중 고아 정리: 고아 Chrome {chrome_n}개 / Chrome 없는 chromedriver {driver_n}개")
+    except Exception as e:
+        print(f"  ⚠️ 실행 중 고아 정리 건너뜀: {type(e).__name__}: {e}")
+
+
+def kill_own_drivers():
+    """이 실행이 띄운 chromedriver 를 전부 트리째 죽인다 — 모든 워커가 끝난 뒤에만 호출.
+
+    시작 전 sweep_stale_chrome 은 headless Chrome 을 "전부" 죽여 다른 캡처 실행까지 끊을 수 있어,
+    종료 시엔 자기 자식(chromedriver)과 고아만 정리한다.
+    """
+    if os.name != "nt":
+        return
+    try:
+        ps = (f"Get-CimInstance Win32_Process -Filter \"Name='chromedriver.exe'\" | "
+              f"Where-Object {{ $_.ParentProcessId -eq {os.getpid()} }} | "
+              f"ForEach-Object {{ taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null }}")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, text=True, timeout=60)
+    except Exception:
+        pass
+    sweep_orphans_during_run()
 
 
 # =========================
@@ -897,7 +980,7 @@ def _build_options(device_type):
     o.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     return o, vw, vh
 
-def _new_driver(device_type, owner_ident=None):
+def _new_driver(device_type, owner_ident=None, svc_box=None):
     """Chrome 을 새로 띄운다.
 
     ⚠ Service 객체를 먼저 만들어 감시(watchdog)에 등록한 뒤 webdriver.Chrome 에 넘긴다.
@@ -907,9 +990,12 @@ def _new_driver(device_type, owner_ident=None):
       (Service 를 미리 start() 하면 안 된다 — webdriver.Chrome 이 무조건 start() 를 다시 불러
        chromedriver 가 두 개 뜬다. selenium 4.41 확인)
     owner_ident: 별도 스레드에서 기동할 때(_new_driver_guarded) 원래 워커 스레드 id.
+    svc_box: 기동 타임아웃 시 호출자가 chromedriver 를 트리째 죽일 수 있게 Service 를 넣어 돌려준다.
     """
     o, vw, vh = _build_options(device_type)
     svc = Service(executable_path=CHROMEDRIVER_EXE) if CHROMEDRIVER_EXE else Service()
+    if svc_box is not None:
+        svc_box["svc"] = svc
     _register_service_for_deadline(svc, owner_ident)
     d = webdriver.Chrome(options=o, service=svc)
     d.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
@@ -939,7 +1025,7 @@ def _new_driver_guarded(device_type):
 
     def _mk():
         try:
-            box["r"] = _new_driver(device_type, owner)
+            box["r"] = _new_driver(device_type, owner, svc_box=box)
         except Exception as e:
             box["e"] = e
 
@@ -950,6 +1036,9 @@ def _new_driver_guarded(device_type):
         return box["r"]
     if "e" in box:
         raise box["e"]
+    # 기동이 물린 chromedriver 를 그대로 두면 Chrome 없이 쌓인다(2026-11-03: 15개 누적) → 트리째 끊는다.
+    # 뒤늦게 기동이 끝나 driver 가 생겨도 그 프로세스는 이미 죽어 있어 다음 호출에서 새로 만든다.
+    _kill_tree(getattr(getattr(box.get("svc"), "process", None), "pid", None))
     # TimeoutException 으로 던져야 capture_page 가 result=timeout 으로 남긴다 (error 와 구분)
     raise TimeoutException(f"driver_start_timeout: Chrome 기동 {DRIVER_START_TIMEOUT}초 초과")
 
@@ -1006,11 +1095,9 @@ def _quit_driver(d, timeout=None):
     th.start()
     th.join(timeout)
     if th.is_alive():
-        print(f"  ⚠️ driver.quit() 무응답({timeout}초) → chromedriver 프로세스 강제 종료")
-        try:
-            d.service.process.kill()          # 종료 요청을 기다리지 않고 끊는다
-        except Exception:
-            pass
+        print(f"  ⚠️ driver.quit() 무응답({timeout}초) → chromedriver+Chrome 트리 강제 종료")
+        # ⚠ .process.kill() 은 chromedriver 만 죽여 Chrome 이 고아로 남는다 → 트리째 끊는다
+        _kill_tree(getattr(getattr(getattr(d, "service", None), "process", None), "pid", None))
     with _all_drivers_lock:
         if d in _all_drivers:
             _all_drivers.remove(d)
@@ -1599,7 +1686,11 @@ def start_deadline_watchdog(stop_event):
         return None
 
     def _loop():
+        cycle = 0
         while not stop_event.wait(DEADLINE_CHECK_INTERVAL):
+            cycle += 1
+            if ORPHAN_SWEEP_EVERY and cycle % ORPHAN_SWEEP_EVERY == 0:
+                sweep_orphans_during_run()
             now = time.time()
             with _inflight_lock:
                 snapshot = list(_inflight.items())
@@ -1627,11 +1718,11 @@ def start_deadline_watchdog(stop_event):
                       f"{info['device']} {info['url']}")
                 info["killed"] = True
                 try:
-                    # quit() 은 응답을 기다리므로 물린 상태에선 같이 멈춘다 → 프로세스를 직접 죽인다
-                    if d is not None:
-                        d.service.process.kill()
-                    else:
-                        svc.process.kill()    # 기동 중(driver 미생성) — Service 프로세스를 직접 끊는다
+                    # quit() 은 응답을 기다리므로 물린 상태에선 같이 멈춘다 → 프로세스를 직접 죽인다.
+                    # ⚠ chromedriver 만 죽이면 Chrome 이 고아로 남는다(2026-11-03) → 트리째 끊는다.
+                    # 기동 중(driver 미생성)이면 Service 프로세스를 대상으로 한다.
+                    proc = d.service.process if d is not None else svc.process
+                    _kill_tree(proc.pid)
                 except Exception:
                     try:
                         if d is not None:
@@ -1709,8 +1800,19 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     # 일시적 실패(네트워크/타임아웃/세션 끊김)만 재시도. 404·리다이렉트 등 "판정 결과"는 재시도해도 같다.
     RETRYABLE = {"timeout", "error", "mhtml_failed"}
 
+    # 연속 timeout 서킷 브레이커 — 걸리면 아직 시작 안 한 태스크는 Chrome 없이 aborted 로 기록만 한다
+    abort_state = {"streak": 0, "aborted": False}
+    abort_lock = threading.Lock()
+
     def _run(task):
         u, dev = task
+        if abort_state["aborted"]:
+            info = {"url": u, "device": dev, "sitecode": get_site_type(u), "result": "aborted",
+                    "final_url": "", "http_status": "", "title": "",
+                    "detail": f"연속 timeout {ABORT_AFTER_CONSECUTIVE_TIMEOUTS}건으로 실행 중단 — 미실행",
+                    "elapsed": 0.0}
+            _append_row(info)
+            return info
         _mark_task_start(u, dev)          # 데드라인 감시 대상에 등록
         try:
             info = capture_page(u, dev)
@@ -1724,6 +1826,13 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
                 info["detail"] = (info["detail"] + f" | retry {attempt}").strip(" |")
         finally:
             _mark_task_end()
+        if ABORT_AFTER_CONSECUTIVE_TIMEOUTS:
+            with abort_lock:
+                abort_state["streak"] = abort_state["streak"] + 1 if info["result"] == "timeout" else 0
+                if abort_state["streak"] >= ABORT_AFTER_CONSECUTIVE_TIMEOUTS and not abort_state["aborted"]:
+                    abort_state["aborted"] = True
+                    print(f"\n🛑 timeout 이 연속 {abort_state['streak']}건 — 남은 작업은 aborted 로 기록하고 "
+                          f"실행을 끝낸다 (사이트 차단 또는 PC 과부하 의심)\n")
         _append_row(info)                 # 끝날 때까지 기다리지 않고 즉시 디스크에 남긴다
         with lock:
             progress["n"] += 1
@@ -1761,6 +1870,8 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
         _stop_watchdog.set()
         # 재사용하던 Chrome 을 모두 닫는다 (중단·예외로 빠져나가도 좀비가 안 남게)
         quit_all_drivers()
+        # quit 이 실패했거나 추적 밖으로 샌 chromedriver·고아 Chrome 까지 치운다 (워커 종료 후라 안전)
+        kill_own_drivers()
 
     # 입력 순서대로 skip / error 집계 (PC·MO 중 하나라도 해당되면 1번만 기록)
     skipped_urls = []     # 리다이렉트로 skip된 URL

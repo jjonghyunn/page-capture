@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-10-06  Jonghyun Park w/ Claude</sub>  
+<sub>2026-11-03  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 JPG 및 MHTML로 저장합니다 (v3.9 부터 PNG → JPG, 파일당 1MB 이하).
@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_261006_v3.9.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_261103_v3.10.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 이미지(JPG·PNG)·MHTML을 파일명의 첫 `_PC`/`_MO` 토큰 **앞부분** 기준으로 하위 폴더 정리 (위 캡처 파일명 규칙에선 사이트코드가 됨). `PC`/`MO` 토큰이 없는 파일은 건너뜀 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_261006_v3.9.py
+python page_capture_261103_v3.10.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_261006_v3.9.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_261006_v3.9.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_261103_v3.10.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_261006_v3.9.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_261103_v3.10.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. 캡처물 정리
@@ -102,6 +102,8 @@ VN_MO_offer_campaign-name_page_0706.jpg
 - **`_run_latest.log`** 에 실행 로그가 남습니다(`LOG_TO_FILE`, **기본 `False`(끔) — v3.5**). 작업 스케줄러에서 `pythonw` 로 돌리면 콘솔 출력이 버려지므로, hang·실패·지연을 나중에 추적하려면 `LOG_TO_FILE=True` 로 켠 뒤 이 파일을 보세요. `STACK_DUMP_INTERVAL` 을 0 보다 크게 두면 그 주기로 전체 스레드 스택도 남지만 **기본값은 0(끔)** 입니다 — v3.4 참고.
 - **`_daily_report.xlsx`** 는 날짜별 결과를 한 파일에 누적합니다. A열 = URL, **최신 날짜가 항상 B~D열**(PC / MO / 이슈)이고 이전 날짜는 오른쪽(E~G, H~J …)으로 밀립니다. 같은 날 다시 실행하면 그 날짜 블록을 덮어씁니다. 저장된 칸은 초록, 문제 있는 칸은 빨강으로 칠해집니다. **실행 중에도 `REPORT_FLUSH_EVERY` 건마다 갱신**되므로, 중간에 프로세스가 죽어도 그 시점까지의 결과가 남습니다.
 - 산출물 파일명은 전부 고정(언더바 접두)이라 날짜별로 쌓이지 않습니다 — 이력은 `_daily_report.xlsx` 한 파일이 갖습니다. 파일명을 바꾸려면 `RESULT_CSV_NAME` / `RUN_LOG_NAME` / `SKIPPED_TXT_NAMES` / `DAILY_REPORT_NAME` 을, **어떤 산출물을 남길지는** `LOG_TO_FILE` / `WRITE_SKIPPED_TXT` / `KEEP_RESULT_CSV` 를 보세요(v3.5, 셋 다 기본 OFF → 폴더엔 리포트만).
+- **고아 Chrome 정리(v3.10)**: 강제 종료(`QUIT_TIMEOUT`·`TASK_DEADLINE_*`·`DRIVER_START_TIMEOUT`)는 chromedriver 와 그 아래 Chrome 을 `taskkill /T` 로 트리째 내립니다. 실행 중에도 `ORPHAN_SWEEP_EVERY` 주기로 부모가 죽은 headless Chrome 과 Chrome 없이 남은 chromedriver 를 치우고, 끝날 때는 이 실행이 띄운 chromedriver 만 정리합니다(동시에 도는 다른 캡처 실행은 건드리지 않음). 실행 시간이 길다는 이유로 Chrome 을 지우지는 않습니다 — `REUSE_DRIVER` 라 정상 워커도 실행 내내 같은 Chrome 을 씁니다.
+- timeout 이 연속 `ABORT_AFTER_CONSECUTIVE_TIMEOUTS`(기본 15)건이면 남은 작업은 브라우저 없이 `aborted` 로 기록하고 실행을 끝냅니다(사이트 차단·PC 과부하 시 수백 건을 헛도는 것 방지, 0 이면 끔).
 - `PREFILTER_HTTP` 가 켜져 있으면 캡처 전에 URL 상태코드를 먼저 확인해, `404`/`5xx` 는 브라우저를 띄우지 않고 `error_page` 로 확정합니다(대상이 수백 개일 때 실행 시간이 크게 줄어듭니다). 판정 결과는 동일하게 `_result_latest.csv` 에 남고 `detail` 에 `사전 확인` 이라고 표시됩니다.
 
 ## 요구사항
@@ -164,6 +166,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.7 | 2026-08-03 | **기동 hang 방지**: 워커가 Chrome 을 띄우는 도중 물리면 데드라인 감시가 이를 끊지 못해 그 워커가 영구히 잡혔다(실제로 마지막 1건이 76분간 정지, 리포트엔 빈칸으로 남음). 원인은 두 가지 — 감시가 끊을 대상이 없는데도 `killed` 플래그를 먼저 세워 다음 주기 재시도까지 막았고, 감시 등록이 `get_driver()` **반환 후**라 기동 구간 자체가 사각지대였다. 이제 ① 대상이 없으면 플래그를 세우지 않고 다음 주기에 다시 본다(로그는 `MISSING_TARGET_WARN_INTERVAL` 간격) ② `Service` 객체를 먼저 감시에 등록하고 `webdriver.Chrome(service=svc)` 로 넘겨 세션 생성 중 hang 도 `svc.process.kill()` 로 끊는다 ③ 재사용 driver 는 `get_driver()` 진입 시점에 등록해 헬스체크·quit 구간까지 감시 ④ `DRIVER_START_TIMEOUT`(기본 120초) 보조 그물 — 초과 시 `timeout` 으로 확정하고 다음 URL 로 넘어간다(`detail` 이 `driver_start_timeout:` 으로 시작해 페이지 타임아웃과 구분) ⑤ `CHROMEDRIVER_EXE` 를 채우면 Selenium Manager 의 드라이버 경로 해석 단계를 건너뛴다(비우면 종전과 동일) |
 | v3.8 | 2026-08-04 | **부분 실행 보호**: URL 몇 개만 골라 재실행하면 그날 완주분이 통째로 `(미실행)` 으로 덮였다(운영에서 998행 소실). 같은 날짜는 리포트에 열을 새로 만들지 않고 그 자리를 재사용하는데, 값 채우기 루프가 시트의 **모든** URL 행을 돌면서 이번 실행 결과에 없는 URL 을 전부 `(미실행)` 으로 써넣은 탓이다. 이제 `write_daily_report(target_urls=...)` 로 이번 실행 대상을 넘기고, **그 밖의 URL 행은 손대지 않는다**(`DAILY_REPORT_PRESERVE_UNTARGETED`, 기본 True — False 로 두면 예전처럼 전부 덮어쓴다). 대상이었는데 결과가 없는 URL 은 종전대로 `(미실행)` 이라 "돌다 죽어서 못 돈 건"은 계속 드러난다. 이슈 문구는 의미가 뒤집혀 있던 `오늘 대상 아님` → `미실행` 으로 바꿨고, 부분 실행이면 완주 직전 콘솔에 경고 1줄을 찍는다 |
 | v3.9 | 2026-10-06 | **저장 용량**: 캡처를 PNG → JPG 로 저장하고 파일당 `IMAGE_MAX_BYTES`(기본 1MB) 이하가 되도록 품질(`JPEG_QUALITY_STEPS`) → 해상도(`JPEG_SCALE_STEPS`) 순으로 낮춘다(`save_image_limited`). PNG 는 평균 3.4MB·최대 28MB 라 한 캠페인 아카이브가 PNG 만 44GB 까지 쌓였다. 실측(MO 세로 36,000px 페이지): PNG 3.9MB → JPG 0.93MB, 육안 화질 차이 거의 없음. JPEG 규격 한계(65500px)를 넘는 MO 스티칭은 먼저 그 안으로 축소. `foldering_move_png.py` 도 `.jpg` 를 함께 옮긴다 |
+| v3.10 | 2026-11-03 | **고아 Chrome 정리**: 강제 종료 경로 3곳(quit 무응답·데드라인 감시·기동 타임아웃)이 chromedriver 만 죽여 headless Chrome 이 고아로 남던 문제 → `taskkill /T` 트리 종료. 실행 중 고아 정리(`ORPHAN_SWEEP_EVERY`) + 종료 시 자기 chromedriver 정리 + 연속 timeout 서킷 브레이커(`ABORT_AFTER_CONSECUTIVE_TIMEOUTS`). 실운영에서 고아 Chrome 이 CPU 60% 를 잡고 chromedriver 15개가 쌓인 채 1시간 넘게 timeout 만 반복했다 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
