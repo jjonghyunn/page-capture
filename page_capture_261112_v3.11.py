@@ -1,6 +1,6 @@
-# page_capture_261103_v3.10.py
+# page_capture_261112_v3.11.py
+# 2026-11-12  Jonghyun Park w/ Claude  — v3.11 [근무시간 경량 모드] 평일 LIGHT_FROM_HOUR(13시) ~ LIGHT_UNTIL_HOUR(18시)엔 동시 캡처를 MAX_WORKERS → LIGHT_MAX_WORKERS(2) 로 줄이고(대기 워커는 Chrome 을 닫아 메모리 반납), 프로세스 우선순위를 PROCESS_PRIORITY(below_normal) 로 낮춰 Chrome 까지 상속 — 캡처가 13시를 넘겨 돌 때 다른 작업이 버벅이지 않게
 # 2026-11-03  Jonghyun Park w/ Claude  — v3.10 [고아 Chrome 정리] 강제 종료 3곳(quit 무응답·데드라인 감시·기동 타임아웃)이 chromedriver 만 죽여 headless Chrome 이 고아로 남던 문제 → taskkill /T 로 트리째 종료(_kill_tree). 실행 중 고아 정리(sweep_orphans_during_run — 부모가 죽은 headless Chrome 과 Chrome 없이 남은 자기 chromedriver, ORPHAN_SWEEP_EVERY), 종료 시 자기 chromedriver 정리(kill_own_drivers — 시작 전 정리와 달리 다른 캡처 실행은 건드리지 않음), 연속 timeout 서킷 브레이커(ABORT_AFTER_CONSECUTIVE_TIMEOUTS → 남은 작업은 aborted 로 기록하고 종료). 실운영에서 고아 Chrome 5세트가 CPU 60% 를 잡고 chromedriver 15개가 쌓인 채 1시간 넘게 timeout 만 반복했다
-# 2026-10-06  Jonghyun Park w/ Claude  — v3.9 [저장 용량] 캡처를 PNG → JPG 로 저장하고 파일당 IMAGE_MAX_BYTES(기본 1MB) 이하가 되도록 품질(JPEG_QUALITY_STEPS) → 해상도(JPEG_SCALE_STEPS) 순으로 낮춘다(save_image_limited). PNG 는 평균 3.4MB·최대 28MB 라 한 캠페인 아카이브가 PNG 만 44GB 까지 쌓였다. JPEG 규격 한계(65500px)를 넘는 MO 스티칭은 먼저 그 안으로 축소한다. 확장자는 IMAGE_EXT 로 바꿀 수 있고 MHTML 은 그대로
 # (이전 버전 이력은 git history / GitHub Releases 참조 — 헤더에는 최근 2개 항목만 남긴다)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
@@ -64,6 +64,24 @@ OUTPUT_DIR = r"C:\Users\user_name\Downloads\captures"
 #   워커가 동시에 무거운 페이지를 잡으면 십수 GB 가 순간적으로 뛴다.
 #   (실측: 31GB PC 에서 10 워커로 전체 실행 중 여유 RAM 이 3GB 아래로 떨어져 프로세스가 죽음)
 MAX_WORKERS = 4
+
+# ── 근무시간 경량 모드 ──────────────────────────────────────────
+# 캡처가 13시를 넘겨 계속 돌면 Chrome 여러 개가 CPU·메모리를 잡아 다른 작업이 버벅인다.
+# 아래 시간대엔 "새로 시작하는" 캡처의 동시 실행 수를 LIGHT_MAX_WORKERS 로 줄인다.
+#   - 이미 돌고 있는 캡처는 끊지 않는다 — 끝나는 대로 자리가 줄어든다.
+#   - 자리를 기다리는 워커는 들고 있던 Chrome 을 닫아 메모리를 돌려준다.
+#   - LIGHT_UNTIL_HOUR 가 지나면 다시 MAX_WORKERS 로 돌아간다.
+#   ⚠ 동시 수를 줄이는 만큼 13시 이후 남은 분량은 느려진다(4 → 2 면 약 2배).
+LIGHT_MODE = True
+LIGHT_FROM_HOUR = 13          # 이 시각(포함)부터
+LIGHT_UNTIL_HOUR = 18         # 이 시각(미포함)까지
+LIGHT_WEEKDAYS_ONLY = True    # True 면 토·일은 경량 모드 안 함
+LIGHT_MAX_WORKERS = 2
+LIGHT_POLL_SEC = 20           # 자리 기다리는 워커가 시간대를 다시 확인하는 주기(초)
+# 프로세스 우선순위 — "below_normal" / "idle" / "" (안 바꿈).
+# Windows 는 BELOW_NORMAL·IDLE 을 자식 프로세스에 물려주므로 chromedriver·Chrome 까지 같이 낮아진다.
+# 다른 프로그램이 CPU 를 안 쓸 땐 속도 차이가 없고, 쓸 때만 양보한다.
+PROCESS_PRIORITY = "below_normal"
 
 # 페이지 로딩 제한 시간(초). 초과하면 그 (url, device) 는 timeout 실패로 기록하고 다음 작업으로 넘어간다.
 # (미설정 시 서버가 hang 하면 워커 1개가 무한정 물려 전체 진행이 막힘)
@@ -1738,10 +1756,75 @@ def start_deadline_watchdog(stop_event):
 # =========================
 # 여러 URL 병렬 캡처
 # =========================
+# ── 근무시간 경량 모드 (LIGHT_*) ─────────────────────────────────
+_slot_cond = threading.Condition()
+_slot_state = {"active": 0, "mode": None}
+
+
+def _in_light_hours(now=None):
+    if not LIGHT_MODE:
+        return False
+    now = now or datetime.now()
+    if LIGHT_WEEKDAYS_ONLY and now.weekday() >= 5:
+        return False
+    return LIGHT_FROM_HOUR <= now.hour < LIGHT_UNTIL_HOUR
+
+
+def _current_worker_limit():
+    light = _in_light_hours()
+    mode = "light" if light else "full"
+    if _slot_state["mode"] != mode:
+        if _slot_state["mode"] is not None or light:
+            lim = LIGHT_MAX_WORKERS if light else MAX_WORKERS
+            print(f"\n{'🌙 근무시간 경량 모드' if light else '☀️ 경량 모드 해제'} — 동시 캡처 {lim}개 "
+                  f"({datetime.now():%H:%M})\n")
+        _slot_state["mode"] = mode
+    return LIGHT_MAX_WORKERS if light else MAX_WORKERS
+
+
+def _acquire_work_slot():
+    """동시 실행 자리를 하나 얻는다. 경량 시간대엔 LIGHT_MAX_WORKERS 개까지만."""
+    while True:
+        with _slot_cond:
+            if _slot_state["active"] < _current_worker_limit():
+                _slot_state["active"] += 1
+                return
+        # 기다리는 동안 이 스레드가 들고 있던 Chrome 은 닫는다 (메모리 반납)
+        if getattr(_tls, "driver", None) is not None:
+            drop_thread_driver()
+        with _slot_cond:
+            _slot_cond.wait(timeout=LIGHT_POLL_SEC)
+
+
+def _release_work_slot():
+    with _slot_cond:
+        _slot_state["active"] -= 1
+        _slot_cond.notify_all()
+
+
+def _lower_process_priority():
+    """PROCESS_PRIORITY 로 이 프로세스 우선순위를 낮춘다 — 이후 띄우는 chromedriver·Chrome 이 상속."""
+    cls = {"below_normal": 0x4000, "idle": 0x40}.get((PROCESS_PRIORITY or "").lower())
+    if os.name != "nt" or not cls:
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.GetCurrentProcess.restype = ctypes.c_void_p
+        k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        if k.SetPriorityClass(k.GetCurrentProcess(), cls):
+            print(f"🔽 프로세스 우선순위 {PROCESS_PRIORITY} (Chrome 까지 상속)")
+        else:
+            print(f"  ⚠️ 우선순위 변경 실패(계속 진행): WinError {ctypes.get_last_error()}")
+    except Exception as e:
+        print(f"  ⚠️ 우선순위 변경 실패(계속 진행): {e}")
+
+
 def capture_urls(urls, max_workers=MAX_WORKERS):
     # ⚠ 저장 폴더는 반드시 캡처 시작 "전"에 만든다.
     #   (예전엔 모든 캡처가 끝난 뒤에 만들어서, 폴더가 없으면 PNG/MHTML 저장이 전량 실패했다)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    _lower_process_priority()
 
     # 로그 파일을 가장 먼저 연다 — 이후의 모든 출력(사전 확인·잔재 정리 포함)이 파일에 남는다
     ts = datetime.now().strftime("%m%d_%H%M")
@@ -1813,6 +1896,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
                     "elapsed": 0.0}
             _append_row(info)
             return info
+        _acquire_work_slot()              # 근무시간이면 동시 실행 수를 줄인다 (LIGHT_*)
         _mark_task_start(u, dev)          # 데드라인 감시 대상에 등록
         try:
             info = capture_page(u, dev)
@@ -1826,6 +1910,7 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
                 info["detail"] = (info["detail"] + f" | retry {attempt}").strip(" |")
         finally:
             _mark_task_end()
+            _release_work_slot()
         if ABORT_AFTER_CONSECUTIVE_TIMEOUTS:
             with abort_lock:
                 abort_state["streak"] = abort_state["streak"] + 1 if info["result"] == "timeout" else 0
