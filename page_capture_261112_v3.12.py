@@ -1,6 +1,6 @@
-# page_capture_261112_v3.11.py
+# page_capture_261112_v3.12.py
+# 2026-11-12  Jonghyun Park w/ Claude  — v3.12 [이어하기] 같은 날 다시 실행하면 _result_latest.csv 에서 판정이 끝난 (URL, 기기)(RESUME_DONE_RESULTS)는 Chrome 없이 건너뛰고 이전 판정을 결과·리포트에 그대로 유지 (RESUME_FROM_RESULT_CSV). redirected·error_page 는 저장 파일이 없어 SKIP_IF_EXISTS 로 안 걸려, 재시작하면 PC 를 처음부터 다시 판정하느라 MO 가 한참 밀리던 문제
 # 2026-11-12  Jonghyun Park w/ Claude  — v3.11 [근무시간 경량 모드] 평일 LIGHT_FROM_HOUR(13시) ~ LIGHT_UNTIL_HOUR(18시)엔 동시 캡처를 MAX_WORKERS → LIGHT_MAX_WORKERS(2) 로 줄이고(대기 워커는 Chrome 을 닫아 메모리 반납), 프로세스 우선순위를 PROCESS_PRIORITY(below_normal) 로 낮춰 Chrome 까지 상속 — 캡처가 13시를 넘겨 돌 때 다른 작업이 버벅이지 않게
-# 2026-11-03  Jonghyun Park w/ Claude  — v3.10 [고아 Chrome 정리] 강제 종료 3곳(quit 무응답·데드라인 감시·기동 타임아웃)이 chromedriver 만 죽여 headless Chrome 이 고아로 남던 문제 → taskkill /T 로 트리째 종료(_kill_tree). 실행 중 고아 정리(sweep_orphans_during_run — 부모가 죽은 headless Chrome 과 Chrome 없이 남은 자기 chromedriver, ORPHAN_SWEEP_EVERY), 종료 시 자기 chromedriver 정리(kill_own_drivers — 시작 전 정리와 달리 다른 캡처 실행은 건드리지 않음), 연속 timeout 서킷 브레이커(ABORT_AFTER_CONSECUTIVE_TIMEOUTS → 남은 작업은 aborted 로 기록하고 종료). 실운영에서 고아 Chrome 5세트가 CPU 60% 를 잡고 chromedriver 15개가 쌓인 채 1시간 넘게 timeout 만 반복했다
 # (이전 버전 이력은 git history / GitHub Releases 참조 — 헤더에는 최근 2개 항목만 남긴다)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
@@ -261,6 +261,16 @@ SKIPPED_TXT_NAMES = {
 # ⚠ access violation 같은 하드 크래시는 finally·atexit 도 실행되지 않는다 — 프로세스가 죽어도
 #   그 시점까지의 결과가 리포트에 남으려면 실행 중에 디스크로 내려두는 수밖에 없다(2026-07-23).
 REPORT_FLUSH_EVERY = 50
+
+# ── 이어하기 ────────────────────────────────────────────────
+# 같은 날 다시 실행하면(중단 후 재시작) 남아 있는 RESULT_CSV_NAME 에서 판정이 끝난 (URL, 기기)는
+# Chrome 없이 건너뛰고 이전 판정을 결과·리포트에 그대로 남긴다.
+# ⚠ SKIP_IF_EXISTS 는 저장 파일이 있는 것만 건너뛴다 — redirected·error_page 는 파일이 없어서
+#   재시작할 때마다 다시 열어 판정했고, PC 가 앞에 줄 서 있어 MO 가 한참 밀렸다(2026-11-12).
+# 파일 수정일이 오늘일 때만 쓴다(완주하면 KEEP_RESULT_CSV=False 로 지워지므로 보통은 크래시·중단 직후만 해당).
+RESUME_FROM_RESULT_CSV = True
+# 이 값이면 '판정 끝' — 다시 안 돈다. timeout·error·mhtml_failed·aborted·task_error·빈값은 다시 시도.
+RESUME_DONE_RESULTS = {"ok", "exists", "redirected", "error_page", "unknown_page", "login_page"}
 
 # ── 모바일 전체페이지 스티칭 ──────────────────────────────────
 # 이음새에서 겹쳐 찍을 양(CSS px). 스크롤은 (뷰포트 높이 - 이 값) 만큼 내려간다.
@@ -1838,15 +1848,39 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
     # 이전 실행이 강제 종료되며 남긴 Chrome 을 먼저 치운다 (캡처 시작 전에만 안전)
     sweep_stale_chrome()
 
+    # ── 이어하기: 오늘 남은 결과 CSV 에서 판정 끝난 (url, device) ──
+    prior = {}
+    _prior_csv = f"{OUTPUT_DIR}/{RESULT_CSV_NAME}"
+    if RESUME_FROM_RESULT_CSV and os.path.exists(_prior_csv):
+        try:
+            if datetime.fromtimestamp(os.path.getmtime(_prior_csv)).date() == datetime.now().date():
+                _want = set(urls)
+                with open(_prior_csv, encoding="utf-8-sig", newline="") as pf:
+                    for r in csv.DictReader(pf):
+                        key = (r.get("url", ""), r.get("device", ""))
+                        if key[0] not in _want or key[1] not in ("PC", "MO"):
+                            continue
+                        if r.get("result") in RESUME_DONE_RESULTS:
+                            prior[key] = r
+                        else:
+                            prior.pop(key, None)   # 같은 키의 마지막 행 기준
+        except Exception as e:
+            print(f"  ⚠️ 이어하기용 결과 CSV 읽기 실패(처음부터 진행): {e}")
+            prior = {}
+    if prior:
+        _n_pc = sum(1 for k in prior if k[1] == "PC")
+        print(f"↪ 이어하기: 이전 판정 {len(prior)}건 건너뜀 (PC {_n_pc} / MO {len(prior) - _n_pc})")
+
     # ── HTTP 사전 필터 ────────────────────────────────────────
     # 확실히 죽은 URL 은 Chrome 을 태우지 않고 여기서 확정한다(워커시간의 절반 이상이 이 부류였다).
-    dead = prefilter_dead_urls(urls)
+    _todo_urls = [u for u in urls if not ((u, "PC") in prior and (u, "MO") in prior)]
+    dead = prefilter_dead_urls(_todo_urls) if _todo_urls else {}
     live = [u for u in urls if u not in dead]
 
     # (url, device) 단위 태스크 — PC/MO 는 서로 독립이라 각각 별도 브라우저로 병렬 처리
     # ⚠ device 로 묶어서 넣는다: driver 재사용 시 한 스레드가 같은 device 를 연속 처리해야
     #   device 가 바뀔 때마다 Chrome 을 새로 띄우는 일이 없다.
-    tasks = [(u, dev) for dev in ("PC", "MO") for u in live]
+    tasks = [(u, dev) for dev in ("PC", "MO") for u in live if (u, dev) not in prior]
     print(f"\n🚀 총 {len(urls)}개 페이지 중 캡처 대상 {len(live)}개 × (PC/MO) = {len(tasks)}개 작업 "
           f"병렬 캡처 시작 (동시 {max_workers}개)\n")
 
@@ -1879,6 +1913,16 @@ def capture_urls(urls, max_workers=MAX_WORKERS):
             rows.append(row)
             results.setdefault(u, {})[dev] = "error_page"
             _append_row(row)
+
+    # 이어하기로 건너뛴 이전 판정도 이번 결과로 남긴다 — 안 그러면 리포트에서 (미실행) 으로 덮인다.
+    for (u, dev), pr in prior.items():
+        if u in dead:
+            continue                   # 방금 사전 확인에서 다시 판정됨
+        row = {c: pr.get(c, "") for c in _cols}
+        row["detail"] = (str(row.get("detail") or "") + " | 이어하기(이전 판정 유지)").strip(" |")
+        rows.append(row)
+        results.setdefault(u, {})[dev] = row["result"]
+        _append_row(row)
 
     # 일시적 실패(네트워크/타임아웃/세션 끊김)만 재시도. 404·리다이렉트 등 "판정 결과"는 재시도해도 같다.
     RETRYABLE = {"timeout", "error", "mhtml_failed"}
