@@ -1,6 +1,6 @@
-# page_capture_261112_v3.12.py
+# page_capture_261124_v3.13.py
+# 2026-11-24  Jonghyun Park w/ Claude  — v3.13 [저장 판정] 직전 날짜와 같은 캡처 건너뛰기(DEDUP_*, 기본 OFF): MHTML 의 추적 속성·링크·이미지 주소가 직전 저장분과 같으면 저장하지 않고 result=same 으로 기록(기준 A/B/C/D 선택). 지난 시즌 페이지 판정(LAST_YEAR_*, 기본 OFF): 같은 URL 에 지난 시즌 내용이 남아 있으면 저장하지 않고 result=last_year, 이번 시즌 내용으로 바뀌면 자동 저장. 빈 페이지 판정(EMPTY_PAGE_*, 기본 ON): HTTP 200 인데 본문이 비어 있으면 저장은 하고 result=empty_page
 # 2026-11-12  Jonghyun Park w/ Claude  — v3.12 [이어하기] 같은 날 다시 실행하면 _result_latest.csv 에서 판정이 끝난 (URL, 기기)(RESUME_DONE_RESULTS)는 Chrome 없이 건너뛰고 이전 판정을 결과·리포트에 그대로 유지 (RESUME_FROM_RESULT_CSV). redirected·error_page 는 저장 파일이 없어 SKIP_IF_EXISTS 로 안 걸려, 재시작하면 PC 를 처음부터 다시 판정하느라 MO 가 한참 밀리던 문제
-# 2026-11-12  Jonghyun Park w/ Claude  — v3.11 [근무시간 경량 모드] 평일 LIGHT_FROM_HOUR(13시) ~ LIGHT_UNTIL_HOUR(18시)엔 동시 캡처를 MAX_WORKERS → LIGHT_MAX_WORKERS(2) 로 줄이고(대기 워커는 Chrome 을 닫아 메모리 반납), 프로세스 우선순위를 PROCESS_PRIORITY(below_normal) 로 낮춰 Chrome 까지 상속 — 캡처가 13시를 넘겨 돌 때 다른 작업이 버벅이지 않게
 # (이전 버전 이력은 git history / GitHub Releases 참조 — 헤더에는 최근 2개 항목만 남긴다)
 #
 # ── 캡처한 URL 확인법 (저장된 .mhtml) ──────────────────────────────
@@ -30,6 +30,10 @@ import json
 import csv
 import sys
 import base64
+import email
+import email.policy
+import hashlib
+import tempfile
 import threading
 import shutil
 import zipfile
@@ -270,7 +274,57 @@ REPORT_FLUSH_EVERY = 50
 # 파일 수정일이 오늘일 때만 쓴다(완주하면 KEEP_RESULT_CSV=False 로 지워지므로 보통은 크래시·중단 직후만 해당).
 RESUME_FROM_RESULT_CSV = True
 # 이 값이면 '판정 끝' — 다시 안 돈다. timeout·error·mhtml_failed·aborted·task_error·빈값은 다시 시도.
-RESUME_DONE_RESULTS = {"ok", "exists", "redirected", "error_page", "unknown_page", "login_page"}
+RESUME_DONE_RESULTS = {"ok", "exists", "redirected", "error_page", "unknown_page", "login_page", "empty_page", "last_year", "same"}
+
+# ── 빈 페이지 판정 ───────────────────────────────────────────
+# 서버가 HTTP 200 을 주는데 본문이 비어 헤더·푸터만 렌더되는 페이지는 위 에러 판정에 안 걸려 ok 로 찍힌다.
+# 캡처 후 본문(아래 EXCLUDE 영역 제외)의 글자 수·이미지 수를 재서 둘 다 기준 미만이면 result=empty_page.
+# ⚠ 캡처 파일은 그대로 저장한다 - 잘못 걸려도 캡처는 남는다. 리포트에선 빨간 칸 + 이슈로 보인다.
+# 실측(PC): 빈 페이지 = 글자 41 / 이미지 0, 정상 페이지 = 글자 2,400 ~ 6,900 / 이미지 16 ~ 30.
+EMPTY_PAGE_CHECK = True
+EMPTY_PAGE_MIN_TEXT = 200        # 본문 글자 수(공백 제외)가 이 값 미만이고
+EMPTY_PAGE_MIN_MEDIA = 1         # 본문 이미지·영상 수가 이 값 미만이면 empty_page
+EMPTY_PAGE_MEDIA_MIN_PX = 100    # 가로·세로 둘 다 이 크기(px) 이상인 img/video/picture/canvas/iframe 만 센다
+# 본문에서 빼는 영역(GNB·푸터·쿠키 배너 등) - CSS 선택자
+EMPTY_PAGE_EXCLUDE_SELECTORS = [
+    "header", "footer", "nav", "#gnb", "[class*='gnb']", "[id*='gnb']",
+    "[class*='footer']", "[id*='footer']", "[class*='cookie']", "[id*='cookie']",
+    "[class*='breadcrumb']",
+]
+
+# ── 지난 시즌 페이지 판정 ────────────────────────────────────
+# 매년 같은 URL 을 쓰는 캠페인은 시작 전까지 지난 시즌 페이지가 그대로 열린다.
+# 본문(EMPTY_PAGE_EXCLUDE_SELECTORS 제외)의 글자·이미지 경로에서 지난/이번 시즌 표식을 세서
+#   지난 ≥ LAST_YEAR_MIN_OLD, 지난 ≥ 이번 × LAST_YEAR_RATIO, 이번 < LAST_YEAR_MAX_NEW 를 모두 만족하면
+# 저장하지 않고 result=last_year 로 기록한다. 이번 시즌 내용으로 바뀌면 다음 실행부터 자동으로 저장된다.
+# 애매하거나 측정에 실패하면 저장한다.
+# ⚠ 아래 패턴은 예시 - 켜기 전에 본인 사이트의 시즌별 제품명·연도·이미지 경로 표기로 바꿀 것.
+LAST_YEAR_CHECK = False
+LAST_YEAR_MIN_OLD = 3
+LAST_YEAR_MAX_NEW = 10
+LAST_YEAR_RATIO = 3              # 지난 표식이 이번 표식의 이 배수 이상이어야 지난 시즌으로 본다 (섞인 페이지는 저장)
+OLD_TEXT_PATTERNS = [r"\bPRODUCT_OLD\b", r"\b2025\b"]
+NEW_TEXT_PATTERNS = [r"\bPRODUCT_NEW\b", r"\b2026\b"]
+# 이미지 경로는 캠페인 자산에만 나오는 표기로 한정 (일반 제품 이미지 경로의 연도는 오탐)
+OLD_ASSET_PATTERNS = [r"/2025/campaign", r"campaign/2025"]
+NEW_ASSET_PATTERNS = [r"/2026/campaign", r"campaign/2026"]
+
+# ── 직전 날짜와 같은 캡처 건너뛰기 ───────────────────────────
+# 캡처한 MHTML 에서 시그니처를 뽑아 같은 (URL, 기기)의 직전 저장분과 같으면 저장하지 않고 result=same 으로 기록한다.
+# 같은 내용이 며칠 이어지면 가장 이른 날짜 파일만 남는다.
+#   A = DEDUP_CORE_ATTRS / B = A + DEDUP_EXTRA_ATTRS / C = A + 링크 + 이미지 주소 / D = B + 링크 + 이미지 주소
+# 항목이 많을수록 덜 건너뛴다 (건너뛰는 양 A ≥ B ≥ D, A ≥ C ≥ D). 링크·이미지 주소는 쿼리를 떼고 비교한다.
+# 다음 경우엔 비교하지 않고 항상 저장: 추적 속성이 하나도 없음 / 시그니처 계산 실패 / 빈 페이지 / 직전 파일이 없어짐.
+# ⚠ 가격·문구만 바뀌고 속성·링크·이미지가 그대로면 같은 것으로 본다.
+DEDUP_CHECK = False
+DEDUP_CRITERION = "D"            # A / B / C / D
+DEDUP_STATE_NAME = "_dedup_state.json"   # OUTPUT_DIR 에 두는 (URL, 기기)별 직전 저장분 시그니처 (네 기준 모두 기록)
+# 기록이 없는 (URL, 기기)는 폴더에 남은 직전 MHTML 로 기준을 만든다. 온라인 전용(OneDrive) 파일은 내려받지 않고 건너뛴다.
+DEDUP_BOOTSTRAP = True
+DEDUP_CORE_ATTRS = ("data-tracking-category", "data-tracking-action", "data-tracking-label")   # 본인 사이트의 추적 속성명으로
+DEDUP_EXTRA_ATTRS = ("data-ga-category", "data-ga-action", "data-ga-label")
+# 이 문구(정규식)가 든 링크·이미지 주소는 비교에서 뺀다 - 쿠키 동의 배너·챗봇 버튼은 같은 페이지도 실행마다 떴다 안 떴다 한다
+DEDUP_IGNORE_PATTERNS = (r"privacy", r"cookie", r"whatsapp", r"chatbot")
 
 # ── 모바일 전체페이지 스티칭 ──────────────────────────────────
 # 이음새에서 겹쳐 찍을 양(CSS px). 스크롤은 (뷰포트 높이 - 이 값) 만큼 내려간다.
@@ -695,6 +749,72 @@ def is_error_page(driver) -> bool:
         pass
 
     return False
+
+# 본문(제외 영역 밖) 글자 수 · 이미지 수 측정 — is_empty_content 에서 쓴다
+_EMPTY_PAGE_JS = r"""
+var ex = arguments[0], minPx = arguments[1];
+var skip = [];
+ex.forEach(function(s){ try { document.querySelectorAll(s).forEach(function(n){ skip.push(n); }); } catch(e){} });
+skip = skip.filter(function(s){ return !skip.some(function(o){ return o !== s && o.contains(s); }); });
+function inSkip(n){ return skip.some(function(s){ return s.contains(n); }); }
+var body = document.body;
+var total = body ? (body.innerText || '').replace(/\s+/g, '').length : 0;
+var skipText = 0;
+skip.forEach(function(s){ if (body && body.contains(s)) skipText += (s.innerText || '').replace(/\s+/g, '').length; });
+var media = 0;
+document.querySelectorAll('img, video, picture, canvas, iframe').forEach(function(el){
+  if (inSkip(el)) return;
+  var r = el.getBoundingClientRect();
+  if (r.width >= minPx && r.height >= minPx) media++;
+});
+return [Math.max(0, total - skipText), media];
+"""
+
+def is_empty_content(driver):
+    """HTTP 200 인데 본문이 빈 페이지인지. (빈 페이지 여부, detail) 반환.
+    측정 실패 시엔 빈 페이지로 보지 않는다(정상 캡처를 empty 로 잘못 찍지 않게)."""
+    if not EMPTY_PAGE_CHECK:
+        return False, ""
+    try:
+        text_len, media = driver.execute_script(
+            _EMPTY_PAGE_JS, EMPTY_PAGE_EXCLUDE_SELECTORS, EMPTY_PAGE_MEDIA_MIN_PX)
+    except Exception:
+        return False, ""
+    empty = text_len < EMPTY_PAGE_MIN_TEXT and media < EMPTY_PAGE_MIN_MEDIA
+    return empty, f"본문 글자 {text_len} / 이미지 {media}"
+
+# 본문(제외 영역·스크립트 제거)의 글자와 이미지 주소 - is_last_year_content 에서 쓴다
+_BODY_MARK_JS = r"""
+var b = document.body.cloneNode(true);
+b.querySelectorAll('script,style,noscript').forEach(function(n){ n.remove(); });
+arguments[0].forEach(function(s){ try { b.querySelectorAll(s).forEach(function(n){ n.remove(); }); } catch(e){} });
+var urls = {};
+b.querySelectorAll('*').forEach(function(n){
+  for (var i = 0; i < n.attributes.length; i++) {
+    n.attributes[i].value.split(/[\s"'(),]+/).forEach(function(u){
+      if (u.length < 400 && u.indexOf('/') >= 0 && /\.(jpe?g|png|webp|gif|svg|mp4)/i.test(u)) urls[u] = 1;
+    });
+  }
+});
+return [b.textContent || '', Object.keys(urls)];
+"""
+
+def is_last_year_content(driver):
+    """지난 시즌 내용이 남아 있는 페이지인지. (지난 시즌 여부, detail) 반환.
+    측정 실패 시엔 지난 시즌으로 보지 않는다(이번 시즌 페이지를 못 찍는 쪽이 더 손해라서)."""
+    if not LAST_YEAR_CHECK:
+        return False, ""
+    try:
+        text, urls = driver.execute_script(_BODY_MARK_JS, EMPTY_PAGE_EXCLUDE_SELECTORS)
+    except Exception as e:
+        return False, f"지난 시즌 판정 측정 실패({type(e).__name__})"
+    def _score(text_pats, asset_pats):
+        n = sum(len(re.findall(p, text, re.I)) for p in text_pats)
+        return n + sum(1 for u in urls if any(re.search(p, u, re.I) for p in asset_pats))
+    old = _score(OLD_TEXT_PATTERNS, OLD_ASSET_PATTERNS)
+    new = _score(NEW_TEXT_PATTERNS, NEW_ASSET_PATTERNS)
+    last = old >= LAST_YEAR_MIN_OLD and old >= new * LAST_YEAR_RATIO and new < LAST_YEAR_MAX_NEW
+    return last, f"지난 시즌 표식 {old} / 이번 시즌 표식 {new}"
 
 def get_main_document_status(driver, final_url):
     """perf log에서 메인 문서(Document) 응답의 HTTP status 반환. 못 찾으면 None.
@@ -1214,11 +1334,168 @@ def wait_page_settled(driver, timeout=None):
         pass
 
 # =========================
+# 직전 날짜와 같은 캡처 건너뛰기
+# =========================
+_DEDUP_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+_DEDUP_ATTR_RE = re.compile(
+    r'\s(' + "|".join(re.escape(a) for a in DEDUP_CORE_ATTRS + DEDUP_EXTRA_ATTRS) + r')="([^"]*)"')
+_DEDUP_HREF_RE = re.compile(r'\shref="([^"]*)"')
+_DEDUP_SRC_RE = re.compile(r'\s(?:src|data-src)="([^"]*)"')
+_DEDUP_IGNORE_RE = re.compile("|".join(DEDUP_IGNORE_PATTERNS), re.I) if DEDUP_IGNORE_PATTERNS else None
+_FILE_ATTR_RECALL = 0x400000          # OneDrive 온라인 전용 (읽으면 내려받는다)
+_dedup_lock = threading.Lock()
+_dedup_state = {"path": None, "data": {}}
+
+
+def _dedup_hash(x):
+    return hashlib.md5(repr(x).encode()).hexdigest()
+
+
+def dedup_signature(mhtml_bytes):
+    """MHTML → (추적 속성 요소 수, {기준: 해시}). 메인 문서(첫 text/html)만 본다."""
+    msg = email.message_from_bytes(mhtml_bytes, policy=email.policy.default)
+    html = next((p.get_content() for p in msg.walk() if p.get_content_type() == "text/html"), "")
+    track = DEDUP_CORE_ATTRS + DEDUP_EXTRA_ATTRS
+    full, core, href, img = [], [], [], []
+    for m in _DEDUP_TAG_RE.finditer(html):
+        t = m.group(0)
+        a = dict(_DEDUP_ATTR_RE.findall(t))
+        if a:
+            full.append(tuple(a.get(k, "") for k in track))
+            c = tuple(a.get(k, "") for k in DEDUP_CORE_ATTRS)
+            if any(c):
+                core.append(c)
+        tag = t[1:t.find(" ") if " " in t else -1].lower()
+        if tag == "a":
+            h = _DEDUP_HREF_RE.search(t)
+            if h and not h.group(1).startswith(("javascript", "#")):
+                href.append(re.split(r"[?#]", h.group(1))[0])
+        elif tag in ("img", "image", "source"):
+            s = _DEDUP_SRC_RE.search(t)
+            if s and s.group(1).startswith(("http", "//")):
+                parts = s.group(1).split("/")
+                if len(parts) > 2 and TARGET_BRAND_KEYWORD in parts[2]:
+                    img.append(re.split(r"[?#]", s.group(1))[0])
+    if _DEDUP_IGNORE_RE:
+        href = [u for u in href if not _DEDUP_IGNORE_RE.search(u)]
+        img = [u for u in img if not _DEDUP_IGNORE_RE.search(u)]
+    # 지연 로딩 타이밍에 따라 같은 이미지가 https: / // 로 한 번 또는 두 번 잡혀, 프로토콜을 떼고 중복 없이 비교한다
+    img = list({re.sub(r"^https?:", "", u) for u in img})
+    for x in (full, core, href, img):
+        x.sort()
+    return len(core), {"A": _dedup_hash(core), "B": _dedup_hash(full),
+                       "C": _dedup_hash((core, href, img)), "D": _dedup_hash((full, href, img))}
+
+
+def _dedup_load():
+    """상태 파일을 한 번만 읽는다 (_dedup_lock 안에서 호출)."""
+    path = os.path.join(OUTPUT_DIR, DEDUP_STATE_NAME)
+    if _dedup_state["path"] == path:
+        return _dedup_state["data"]
+    data = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  ⚠️ 중복 판정 기록 읽기 실패(새로 시작): {e}")
+    _dedup_state.update(path=path, data=data if isinstance(data, dict) else {})
+    return _dedup_state["data"]
+
+
+def _dedup_write():
+    """상태 파일 저장 (_dedup_lock 안에서 호출). 실패해도 캡처는 계속한다."""
+    path = _dedup_state["path"]
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_dedup_state["data"], f, ensure_ascii=False, indent=1)
+    except OSError as e:
+        print(f"  ⚠️ 중복 판정 기록 저장 실패(무시): {e}")
+        return
+    for i in range(3):              # 동기화 프로그램이 잠깐 잡고 있으면 다시 시도
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as e:
+            if i == 2:
+                print(f"  ⚠️ 중복 판정 기록 저장 실패(무시): {e}")
+            time.sleep(0.5)
+
+
+def _dedup_dirs(base):
+    """이 파일명이 있을 수 있는 폴더: OUTPUT_DIR 루트 + sitecode 폴더."""
+    m = re.match(r"(.+?)[ _](PC|MO)", base)
+    return [OUTPUT_DIR] + ([os.path.join(OUTPUT_DIR, m.group(1).replace(" ", "_"))] if m else [])
+
+
+def _dedup_bootstrap(mhtml_path):
+    """상태 기록이 없을 때 폴더에 남은 직전 MHTML(날짜만 다른 같은 이름)로 기준을 만든다."""
+    base = os.path.basename(mhtml_path)
+    m = re.match(r"(.*)_\d{4}\.mhtml$", base)
+    if not DEDUP_BOOTSTRAP or not m:
+        return None
+    name_re = re.compile(re.escape(m.group(1)) + r"_\d{4}\.mhtml")
+    found = []
+    for d in _dedup_dirs(base):
+        if os.path.isdir(d):
+            found += [os.path.join(d, n) for n in os.listdir(d) if n != base and name_re.fullmatch(n)]
+    if not found:
+        return None
+    last = max(found, key=os.path.getmtime)      # MMDD 는 해를 넘기면 순서가 뒤집혀 수정 시각으로 고른다
+    st = os.stat(last)
+    if getattr(st, "st_file_attributes", 0) & _FILE_ATTR_RECALL:
+        return None
+    with open(last, "rb") as f:
+        n, hs = dedup_signature(f.read())
+    return {"date": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"), "n_core": n, "hash": hs,
+            "mhtml": os.path.basename(last)}
+
+
+def dedup_check(url, device, mhtml_bytes, mhtml_path):
+    """(직전 저장분과 같은지, 설명, 이번 시그니처). 확신할 수 없으면 같지 않은 것으로 본다(= 저장)."""
+    if not DEDUP_CHECK:
+        return False, "", None
+    try:
+        n, hs = dedup_signature(mhtml_bytes)
+        cur = {"n_core": n, "hash": hs}
+        if not n:
+            return False, "추적 속성 없음", cur
+        with _dedup_lock:
+            prev = _dedup_load().get(f"{device} {url}")
+        prev = prev or _dedup_bootstrap(mhtml_path)
+        if not prev or not prev.get("n_core"):
+            return False, "", cur
+        if prev["hash"].get(DEDUP_CRITERION) != hs[DEDUP_CRITERION]:
+            return False, f"{prev['date']} 저장분과 다름", cur
+        if not any(os.path.exists(os.path.join(d, prev["mhtml"])) for d in _dedup_dirs(prev["mhtml"])):
+            return False, f"{prev['date']} 저장분과 같지만 그 파일이 없어 저장", cur
+        return True, f"{prev['date']} 저장분과 같음", cur
+    except Exception as e:
+        return False, f"중복 판정 실패({type(e).__name__})", None
+
+
+def dedup_remember(url, device, cur, mhtml_path):
+    """저장을 마친 뒤 이번 시그니처를 다음 비교 기준으로 남긴다. 계산에 실패했으면 기준을 지운다."""
+    if not DEDUP_CHECK:
+        return
+    with _dedup_lock:
+        data = _dedup_load()
+        key = f"{device} {url}"
+        if cur is None:
+            data.pop(key, None)
+        else:
+            data[key] = dict(cur, date=datetime.now().strftime("%Y-%m-%d"), mhtml=os.path.basename(mhtml_path))
+        _dedup_write()
+
+
+# =========================
 # 메인 캡처 함수
 # =========================
 def capture_page(url, device_type):
     """캡처 1건 수행. 결과를 dict 로 반환 (result_*.csv 한 행에 대응).
-    result: ok / redirected / error_page / unknown_page / timeout / error"""
+    result: ok / empty_page(저장은 함) / last_year·same(저장 안 함) / redirected / error_page / unknown_page / timeout / error"""
     sitecode, page_path, sitetype = get_page_info(url)
     page_name = safe_filename(f"{sitecode}_{page_path}")
     timestamp = datetime.now().strftime("%m%d")
@@ -1318,7 +1595,16 @@ def capture_page(url, device_type):
                 print(f"      이동: {cur}")
                 return _ret("redirected", "저장 직전 재확인에서 이동 감지")
 
+        # ── 지난 시즌 페이지 판정 - 지난 시즌 내용이면 저장하지 않는다 ──
+        last_year, ly_detail = is_last_year_content(driver)
+        if last_year:
+            print(f"  🗓️ 지난 시즌 페이지로 보임({ly_detail}) → 저장 안 함")
+            return _ret("last_year", ly_detail)
+
         filename, mhtml_filename = png_path, mhtml_path
+        # 이미지는 임시 폴더에 먼저 만들고, 저장하기로 정해진 뒤에만 옮긴다 (워커마다 파일 1개를 돌려 쓴다)
+        tmp_img = os.path.join(tempfile.gettempdir(),
+                               f"page_capture_{os.getpid()}_{threading.get_ident()}{IMAGE_EXT}")
 
         if is_hq_path(url):
             wait_dom_settled(driver)
@@ -1337,7 +1623,7 @@ def capture_page(url, device_type):
                 # capture_full_page_mobile 이 스스로 끝까지 스크롤하며 찍으므로
                 # 여기서 smooth_scroll_desktop 을 또 돌리면 시간만 두 배로 든다.
                 img = capture_full_page_mobile(driver, vw)
-                nbytes, q, sc = save_image_limited(img, filename)
+                nbytes, q, sc = save_image_limited(img, tmp_img)
             else:
                 total_h = smooth_scroll_desktop(driver)
                 driver.set_window_size(vw, min(total_h + 200, MAX_CAPTURE_HEIGHT))
@@ -1354,8 +1640,15 @@ def capture_page(url, device_type):
                 png2 = capture_fullpage_cdp(driver) if USE_CDP_FULLPAGE else None
                 png = png2 if png2 is not None else screenshot_png(driver)
                 retry -= 1
-            nbytes, q, sc = save_image_limited(Image.open(io.BytesIO(png)), filename)
-        print(f"  ✅ 저장: {filename}  ({nbytes/1e6:.2f}MB, q{q}, x{sc:.2f})")
+            nbytes, q, sc = save_image_limited(Image.open(io.BytesIO(png)), tmp_img)
+        def _keep_image():
+            shutil.move(tmp_img, filename)
+            print(f"  ✅ 저장: {filename}  ({nbytes/1e6:.2f}MB, q{q}, x{sc:.2f})")
+
+        # ── 빈 페이지 판정 (캡처 후 = 레이지 로딩까지 스크롤이 끝난 상태에서 잰다) ──
+        empty, empty_detail = is_empty_content(driver)
+        if empty:
+            print(f"  ⚠️ 빈 페이지로 보임({empty_detail}) → 저장은 하고 empty_page 로 기록")
 
         # ── MHTML 저장 ────────────────────────────────────────
         # fallback 으로 창을 늘렸다면 원래 뷰포트로 복원 (그 상태로 CDP 호출 시 blank 발생)
@@ -1367,17 +1660,30 @@ def capture_page(url, device_type):
         except TimeoutError as e:
             # 이 세션은 CDP 가 응답을 멈춘 상태 — 물고 다음 URL 로 가면 그 URL 까지 망친다.
             print(f"  ⚠️ MHTML 저장 무응답 → 이 건만 포기: {e}")
+            _keep_image()
             drop_thread_driver()
             return _ret("mhtml_failed", str(e))
         mhtml_data = (result or {}).get("data", "")
         if not mhtml_data or len(mhtml_data) < MIN_MHTML_BYTES:
             # PNG 는 남았는데 MHTML 만 실패한 경우 — 결과와 산출물이 어긋나지 않게 따로 표시
             print(f"  ⚠️ MHTML 이 비었거나 너무 작음({len(mhtml_data)}B)")
+            _keep_image()
             return _ret("mhtml_failed", f"mhtml {len(mhtml_data)}B < {MIN_MHTML_BYTES}B")
+        mhtml_bytes = mhtml_data.encode("utf-8")
+        # ── 직전 날짜와 같으면 저장하지 않는다 (이미지는 아직 임시 폴더에만 있다) ──
+        same, dd_detail, dd_sig = dedup_check(url, device_type, mhtml_bytes, mhtml_filename)
+        if same and not empty:
+            print(f"  ♻️ {dd_detail} → 저장 안 함")
+            os.remove(tmp_img)
+            return _ret("same", dd_detail)
+        _keep_image()
         with open(mhtml_filename, "wb") as mf:  # bytes 쓰기 (텍스트 모드 시 blank 가능)
-            mf.write(mhtml_data.encode("utf-8"))
+            mf.write(mhtml_bytes)
         print(f"  ✅ MHTML 저장: {mhtml_filename}")
-        return _ret("ok")
+        dedup_remember(url, device_type, dd_sig, mhtml_filename)
+        if empty:
+            return _ret("empty_page", empty_detail)
+        return _ret("ok", ly_detail)
 
     except TimeoutException as e:
         # PAGE_LOAD_TIMEOUT / SCRIPT_TIMEOUT 초과 또는 Chrome 기동 타임아웃 — 실패로 확정하고 다음 작업으로
@@ -1486,9 +1792,9 @@ def write_daily_report(csv_path, run_date, quiet=False, target_urls=None):
                 issues.append(f"{dev}:{r.get('result')}"
                               + (f"({r.get('detail','')[:40]})" if r.get("detail") else ""))
         # 한쪽만 저장된 경우는 눈에 띄게 표시 — 오늘 PT_MO 같은 케이스가 여기 걸린다
-        if pc == "ok" and mo not in ("ok", "exists"):
+        if pc == "ok" and mo not in ("ok", "exists", "empty_page", "same"):
             issues.append("MO 미저장")
-        if mo == "ok" and pc not in ("ok", "exists"):
+        if mo == "ok" and pc not in ("ok", "exists", "empty_page", "same"):
             issues.append("PC 미저장")
         day_vals[u] = (pc, mo, " / ".join(issues))
 
@@ -1567,6 +1873,7 @@ def write_daily_report(csv_path, run_date, quiet=False, target_urls=None):
     # ── 값 채우기
     fill_bad = PatternFill("solid", fgColor="FFC7CE")     # 문제 있는 칸
     fill_ok = PatternFill("solid", fgColor="E2EFDA")      # 저장된 칸
+    fill_skip = PatternFill("solid", fgColor="DDEBF7")    # 일부러 저장하지 않은 칸 (same / last_year)
     for u, r in row_of.items():
         if u in day_vals:
             pc, mo, issue = day_vals[u]
@@ -1580,9 +1887,12 @@ def write_daily_report(csv_path, run_date, quiet=False, target_urls=None):
             if off < 2:
                 if val in ("ok", "exists"):
                     c.fill = fill_ok
+                elif val in ("same", "last_year"):
+                    c.fill = fill_skip
                 elif val not in ("error_page", ""):
                     c.fill = fill_bad
-            elif val and val != "미실행":
+            elif val and val != "미실행" and not (
+                    {pc, mo} <= {"ok", "exists", "same", "last_year", "error_page", ""} and "미저장" not in val):
                 c.fill = fill_bad
 
     # ── 보기 설정

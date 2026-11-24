@@ -1,5 +1,5 @@
 # page_capture  
-<sub>2026-11-12  Jonghyun Park w/ Claude</sub>  
+<sub>2026-11-24  Jonghyun Park w/ Claude</sub>  
 
 Selenium 기반 웹 페이지 전체 캡처 자동화 도구입니다.  
 PC / MO(모바일) 뷰를 각각 캡처하여 지정 폴더에 JPG 및 MHTML로 저장합니다 (v3.9 부터 PNG → JPG, 파일당 1MB 이하).
@@ -9,7 +9,7 @@ URL이 많을 때는 `MAX_WORKERS` 개의 헤드리스 Chrome을 동시에 띄�
 
 | 파일 | 설명 |
 |---|---|
-| `page_capture_261112_v3.12.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
+| `page_capture_261124_v3.13.py` | 메인 캡처 스크립트 (단일 파일로 관리, 날짜는 최신 변경 시점) |
 | `foldering_move_png.py` | 캡처된 이미지(JPG·PNG)·MHTML을 파일명의 첫 `_PC`/`_MO` 토큰 **앞부분** 기준으로 하위 폴더 정리 (위 캡처 파일명 규칙에선 사이트코드가 됨). `PC`/`MO` 토큰이 없는 파일은 건너뜀 |
 
 > 파일명은 `page_capture_YYMMDD_v메이저.마이너.py` 형식 — `YYMMDD`는 최신 변경 시점, `v메이저.마이너`는 변경 단위. 캠페인별 날짜는 파일명에 포함하지 않음 (의미 없는 suffix가 됨).
@@ -36,7 +36,7 @@ HQ_SITE_CODE = "hq"                                  # 본사(HQ) path 세그먼
 ### 3. 직접 실행
 
 ```bash
-python page_capture_261112_v3.12.py
+python page_capture_261124_v3.13.py
 ```
 
 ### 4. 작업 스케줄러 등록 (창 없이 백그라운드 실행)
@@ -49,7 +49,7 @@ python page_capture_261112_v3.12.py
 
 ```bat
 schtasks /create /tn page_capture ^
-  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_261112_v3.12.py\"" ^
+  /tr "\"C:\Python3xx\pythonw.exe\" \"C:\Users\user_name\...\page_capture_261124_v3.13.py\"" ^
   /sc daily /st 09:00 /it /f
 ```
 
@@ -60,7 +60,7 @@ schtasks /create /tn page_capture ^
 3. **트리거** 탭 → 새로 만들기 → 반복 주기 설정
 4. **동작** 탭 → 새로 만들기:
    - 프로그램/스크립트: `C:\Python3xx\pythonw.exe` (창 없이 실행; 일반 python.exe 쓰면 cmd 창 팝업됨)
-   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_261112_v3.12.py"`
+   - 인수 추가: `"C:\Users\user_name\OneDrive - company_name\...\page_capture_261124_v3.13.py"`
 5. **조건** 탭 → 전원 섹션 → **"AC 전원이 연결된 경우에만 작업 시작" 체크 해제**
 
 ### 5. 캡처물 정리
@@ -100,11 +100,26 @@ VN_MO_offer_campaign-name_page_0706.jpg
 - 같은 날 다시 실행하면 이미 있는 JPG+MHTML 은 건너뜁니다(`SKIP_IF_EXISTS`). 중단 후 이어받기가 목적이며, 다시 받고 싶으면 파일을 지우거나 옵션을 끄면 됩니다. 캡처물을 `foldering_move_png.py` 로 sitecode 폴더에 옮긴 뒤에도 `{OUTPUT_DIR}/{SITECODE}/` 를 함께 확인하므로 이어하기가 계속 동작합니다(v3.4).
 - 캡처 후 `foldering_move_png.py` 를 돌리면 위 JPG·MHTML 이 사이트코드별 하위 폴더로 정리됩니다.
 - **`_run_latest.log`** 에 실행 로그가 남습니다(`LOG_TO_FILE`, **기본 `False`(끔) — v3.5**). 작업 스케줄러에서 `pythonw` 로 돌리면 콘솔 출력이 버려지므로, hang·실패·지연을 나중에 추적하려면 `LOG_TO_FILE=True` 로 켠 뒤 이 파일을 보세요. `STACK_DUMP_INTERVAL` 을 0 보다 크게 두면 그 주기로 전체 스레드 스택도 남지만 **기본값은 0(끔)** 입니다 — v3.4 참고.
-- **`_daily_report.xlsx`** 는 날짜별 결과를 한 파일에 누적합니다. A열 = URL, **최신 날짜가 항상 B~D열**(PC / MO / 이슈)이고 이전 날짜는 오른쪽(E~G, H~J …)으로 밀립니다. 같은 날 다시 실행하면 그 날짜 블록을 덮어씁니다. 저장된 칸은 초록, 문제 있는 칸은 빨강으로 칠해집니다. **실행 중에도 `REPORT_FLUSH_EVERY` 건마다 갱신**되므로, 중간에 프로세스가 죽어도 그 시점까지의 결과가 남습니다.
+- **`_daily_report.xlsx`** 는 날짜별 결과를 한 파일에 누적합니다. A열 = URL, **최신 날짜가 항상 B~D열**(PC / MO / 이슈)이고 이전 날짜는 오른쪽(E~G, H~J …)으로 밀립니다. 같은 날 다시 실행하면 그 날짜 블록을 덮어씁니다. 저장된 칸은 초록, 일부러 저장하지 않은 칸(`same`·`last_year`)은 파랑, 문제 있는 칸은 빨강으로 칠해집니다. **실행 중에도 `REPORT_FLUSH_EVERY` 건마다 갱신**되므로, 중간에 프로세스가 죽어도 그 시점까지의 결과가 남습니다.
 - 산출물 파일명은 전부 고정(언더바 접두)이라 날짜별로 쌓이지 않습니다 — 이력은 `_daily_report.xlsx` 한 파일이 갖습니다. 파일명을 바꾸려면 `RESULT_CSV_NAME` / `RUN_LOG_NAME` / `SKIPPED_TXT_NAMES` / `DAILY_REPORT_NAME` 을, **어떤 산출물을 남길지는** `LOG_TO_FILE` / `WRITE_SKIPPED_TXT` / `KEEP_RESULT_CSV` 를 보세요(v3.5, 셋 다 기본 OFF → 폴더엔 리포트만).
 - **고아 Chrome 정리(v3.10)**: 강제 종료(`QUIT_TIMEOUT`·`TASK_DEADLINE_*`·`DRIVER_START_TIMEOUT`)는 chromedriver 와 그 아래 Chrome 을 `taskkill /T` 로 트리째 내립니다. 실행 중에도 `ORPHAN_SWEEP_EVERY` 주기로 부모가 죽은 headless Chrome 과 Chrome 없이 남은 chromedriver 를 치우고, 끝날 때는 이 실행이 띄운 chromedriver 만 정리합니다(동시에 도는 다른 캡처 실행은 건드리지 않음). 실행 시간이 길다는 이유로 Chrome 을 지우지는 않습니다 — `REUSE_DRIVER` 라 정상 워커도 실행 내내 같은 Chrome 을 씁니다.
-- **이어하기(v3.12)**: 같은 날 다시 실행하면(중단 후 재시작) 남아 있는 `_result_latest.csv` 에서 판정이 끝난 (URL, 기기)(`RESUME_DONE_RESULTS` — ok·exists·redirected·error_page·unknown_page·login_page)는 브라우저 없이 건너뛰고, 이전 판정을 결과 CSV·일일 리포트에 그대로 남깁니다(`detail` 에 `이어하기(이전 판정 유지)`). timeout·error 등은 다시 시도합니다. `SKIP_IF_EXISTS` 는 저장 파일이 있는 것만 건너뛰어 redirected·error_page 는 재시작할 때마다 다시 판정했는데, 이제 남은 작업으로 바로 넘어갑니다. CSV 수정일이 오늘일 때만 쓰며 `RESUME_FROM_RESULT_CSV=False` 로 끕니다.
+- **이어하기(v3.12)**: 같은 날 다시 실행하면(중단 후 재시작) 남아 있는 `_result_latest.csv` 에서 판정이 끝난 (URL, 기기)(`RESUME_DONE_RESULTS` — ok·exists·redirected·error_page·unknown_page·login_page·empty_page·last_year·same)는 브라우저 없이 건너뛰고, 이전 판정을 결과 CSV·일일 리포트에 그대로 남깁니다(`detail` 에 `이어하기(이전 판정 유지)`). timeout·error 등은 다시 시도합니다. `SKIP_IF_EXISTS` 는 저장 파일이 있는 것만 건너뛰어 redirected·error_page 는 재시작할 때마다 다시 판정했는데, 이제 남은 작업으로 바로 넘어갑니다. CSV 수정일이 오늘일 때만 쓰며 `RESUME_FROM_RESULT_CSV=False` 로 끕니다.
 - **근무시간 경량 모드(v3.11)**: 평일 `LIGHT_FROM_HOUR`(기본 13) ~ `LIGHT_UNTIL_HOUR`(기본 18, 미포함) 사이엔 새로 시작하는 캡처의 동시 실행 수를 `MAX_WORKERS` 대신 `LIGHT_MAX_WORKERS`(기본 2)로 줄입니다. 돌고 있는 캡처는 끊지 않고, 자리를 기다리는 워커는 들고 있던 Chrome 을 닫아 메모리를 돌려줍니다. 시간대가 지나면 다시 `MAX_WORKERS` 로 돌아가고, `LIGHT_WEEKDAYS_ONLY=True` 면 주말엔 적용하지 않습니다(`LIGHT_MODE=False` 로 끔). 또 시작 시 프로세스 우선순위를 `PROCESS_PRIORITY`(기본 `below_normal`)로 낮춥니다 — Windows 는 이 우선순위를 자식에게 물려주므로 chromedriver·Chrome 까지 같이 낮아져, 다른 작업을 할 때만 CPU 를 양보합니다(`""` 이면 안 바꿈). 동시 수를 줄인 만큼 해당 시간대에 남은 분량은 느려집니다.
+- **직전 날짜와 같은 캡처 건너뛰기(v3.13, 기본 OFF)**: `DEDUP_CHECK=True` 로 켜면 캡처한 MHTML 에서 시그니처를 뽑아 같은 (URL, 기기)의 직전 저장분과 비교하고, 같으면 저장하지 않고 `same` 으로 기록합니다. 같은 내용이 며칠 이어지면 가장 이른 날짜만 남습니다.
+
+  | `DEDUP_CRITERION` | 비교 항목 |
+  |---|---|
+  | `A` | `DEDUP_CORE_ATTRS` (추적 속성) |
+  | `B` | A + `DEDUP_EXTRA_ATTRS` |
+  | `C` | A + 링크 + 이미지 주소 |
+  | `D` (기본) | B + 링크 + 이미지 주소 |
+
+  - 추적 속성명(`DEDUP_CORE_ATTRS` / `DEDUP_EXTRA_ATTRS`)은 본인 사이트에 맞게 바꿔야 합니다. 이미지는 host 에 `TARGET_BRAND_KEYWORD` 가 든 것만 봅니다.
+  - 추적 속성이 없음 / 시그니처 계산 실패 / 빈 페이지 / 직전 파일이 없어짐 → 비교하지 않고 **항상 저장**합니다.
+  - 링크·이미지 주소는 쿼리를 떼고 비교하고, `DEDUP_IGNORE_PATTERNS`(쿠키 배너·챗봇 등)에 걸리는 주소는 뺍니다. **가격·문구만 바뀐 것은 같은 것으로 봅니다.**
+  - 기준은 `OUTPUT_DIR` 의 `_dedup_state.json` 에 남고, 기록이 없으면 폴더의 직전 MHTML 로 만듭니다(`DEDUP_BOOTSTRAP`). 판정하려면 페이지를 끝까지 렌더해야 하므로 실행 시간은 줄지 않고 저장 용량만 줍니다.
+- **지난 시즌 페이지 판정(v3.13, 기본 OFF)**: 매년 같은 URL 을 쓰는 캠페인은 시작 전까지 지난 시즌 페이지가 열립니다. `LAST_YEAR_CHECK=True` 로 켜면 본문 글자·이미지 경로의 지난/이번 시즌 표식(`OLD_*_PATTERNS` / `NEW_*_PATTERNS`)을 세어 지난 시즌이면 저장하지 않고 `last_year` 로 기록하고, 이번 시즌 내용으로 바뀌면 자동으로 저장합니다. 패턴은 예시이므로 켜기 전에 바꾸세요. 애매하면 저장합니다.
+- **빈 페이지 판정(v3.13, 기본 ON)**: HTTP 200 인데 본문(헤더·푸터 등 제외)의 글자·이미지가 `EMPTY_PAGE_MIN_TEXT` / `EMPTY_PAGE_MIN_MEDIA` 미만이면 저장은 하되 `empty_page` 로 기록합니다.
 - timeout 이 연속 `ABORT_AFTER_CONSECUTIVE_TIMEOUTS`(기본 15)건이면 남은 작업은 브라우저 없이 `aborted` 로 기록하고 실행을 끝냅니다(사이트 차단·PC 과부하 시 수백 건을 헛도는 것 방지, 0 이면 끔).
 - `PREFILTER_HTTP` 가 켜져 있으면 캡처 전에 URL 상태코드를 먼저 확인해, `404`/`5xx` 는 브라우저를 띄우지 않고 `error_page` 로 확정합니다(대상이 수백 개일 때 실행 시간이 크게 줄어듭니다). 판정 결과는 동일하게 `_result_latest.csv` 에 남고 `detail` 에 `사전 확인` 이라고 표시됩니다.
 
@@ -171,6 +186,7 @@ Selenium 4.6+ 의 **Selenium Manager**가 설치된 Chrome 버전에 맞는 Chro
 | v3.10 | 2026-11-03 | **고아 Chrome 정리**: 강제 종료 경로 3곳(quit 무응답·데드라인 감시·기동 타임아웃)이 chromedriver 만 죽여 headless Chrome 이 고아로 남던 문제 → `taskkill /T` 트리 종료. 실행 중 고아 정리(`ORPHAN_SWEEP_EVERY`) + 종료 시 자기 chromedriver 정리 + 연속 timeout 서킷 브레이커(`ABORT_AFTER_CONSECUTIVE_TIMEOUTS`). 실운영에서 고아 Chrome 이 CPU 60% 를 잡고 chromedriver 15개가 쌓인 채 1시간 넘게 timeout 만 반복했다 |
 | v3.11 | 2026-11-12 | **근무시간 경량 모드**: 캡처가 오후까지 이어지면 headless Chrome 여러 개가 CPU·메모리를 잡아 같은 PC 의 다른 작업이 버벅였다. 평일 `LIGHT_FROM_HOUR` ~ `LIGHT_UNTIL_HOUR` 엔 동시 캡처를 `LIGHT_MAX_WORKERS`(기본 2)로 줄이고(대기 워커는 Chrome 을 닫아 메모리 반납), 프로세스 우선순위를 `PROCESS_PRIORITY`(기본 `below_normal`)로 낮춰 Chrome 까지 상속시킨다 |
 | v3.12 | 2026-11-12 | **이어하기**: 같은 날 재실행 시 `_result_latest.csv` 에서 판정이 끝난 (URL, 기기)는 브라우저 없이 건너뛰고 이전 판정을 결과·리포트에 유지(`RESUME_FROM_RESULT_CSV`, `RESUME_DONE_RESULTS`). redirected·error_page 는 저장 파일이 없어 `SKIP_IF_EXISTS` 에 안 걸려, 재시작하면 PC 를 처음부터 다시 판정하느라 MO 가 한참 밀렸다 |
+| v3.13 | 2026-11-24 | **저장 판정 3종**: ① 직전 날짜와 같은 캡처 건너뛰기(`DEDUP_*`, 기본 OFF) - 추적 속성·링크·이미지 주소가 직전 저장분과 같으면 `same`. 이미지는 임시 폴더에 먼저 만들고 저장하기로 정해진 뒤에만 옮긴다 ② 지난 시즌 페이지 판정(`LAST_YEAR_*`, 기본 OFF) - 지난 시즌 내용이면 `last_year` ③ 빈 페이지 판정(`EMPTY_PAGE_*`, 기본 ON) - HTTP 200 인데 본문이 비면 저장은 하고 `empty_page`. 일일 리포트는 `same`·`last_year` 를 파랑으로 표시 |
 
 > 상세 이력은 메인 스크립트 헤더 주석 참고. 파일은 단일 파일로 관리되며 버전업 시 rename + 헤더 갱신.
 
